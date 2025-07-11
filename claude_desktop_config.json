@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "pdf-enrichment": {
+      "command": "python",
+      "args": [
+        "/Users/wseke/Desktop/vpars3/src/pdf_enrichment/mcp_server.py"
+      ],
+      "cwd": "/Users/wseke/Desktop/vpars3",
+      "env": {
+        "PYTHONPATH": "/Users/wseke/Desktop/vpars3",
+        "PDF_ENRICHMENT_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
