@@ -17,35 +17,36 @@ from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolResult,
     ImageContent,
+    ListPromptsResult,
+    ListResourcesResult,
     ListToolsResult,
+    ServerCapabilities,
     TextContent,
     Tool,
 )
 from pydantic import BaseModel, Field
 
-from .field_analyzer import FieldAnalyzer
-from .field_types import BEMNamingResult, FormAnalysis, FieldModificationResult
-from .pdf_modifier import PDFModifier
-from .preview_generator import PreviewGenerator
-from .utils import setup_logging
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.pdf_enrichment.field_analyzer import FieldAnalyzer
+from src.pdf_enrichment.field_types import FormField, FieldModificationResult
+from src.pdf_enrichment.pdf_modifier import PDFModifier
+from src.pdf_enrichment.utils import setup_logging
 
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-class GenerateBEMNamesInput(BaseModel):
-    """Input for generate_bem_names tool."""
+class ExtractPDFFieldsInput(BaseModel):
+    """Input for extract_pdf_fields tool."""
     
     pdf_filename: str = Field(description="Name of the PDF file uploaded to Claude Desktop")
-    analysis_mode: str = Field(
-        default="comprehensive",
-        description="Analysis mode: 'quick' for basic analysis, 'comprehensive' for detailed analysis"
-    )
-    custom_sections: Optional[List[str]] = Field(
-        None,
-        description="Custom section names to prioritize in BEM naming"
-    )
 
 
 class ModifyFormFieldsInput(BaseModel):
@@ -65,54 +66,38 @@ class ModifyFormFieldsInput(BaseModel):
     )
 
 
-class BatchAnalysisInput(BaseModel):
-    """Input for batch_analyze_forms tool."""
-    
-    pdf_filenames: List[str] = Field(
-        description="List of PDF filenames to analyze in batch"
-    )
-    consistency_check: bool = Field(
-        True,
-        description="Whether to check naming consistency across forms"
-    )
-    generate_summary: bool = Field(
-        True,
-        description="Whether to generate a summary report"
-    )
 
 
 class PDFEnrichmentServer:
     """MCP Server for PDF Form Field Enrichment."""
     
     def __init__(self) -> None:
-        self.server = Server("pdf-enrichment")
+        self.server = Server("pdf-enrichment", version="0.1.0")
         self.field_analyzer = FieldAnalyzer()
         self.pdf_modifier = PDFModifier()
-        self.preview_generator = PreviewGenerator()
         
         # Register tools
         self._register_tools()
         
         # Server state
-        self.analysis_cache: Dict[str, FormAnalysis] = {}
         self.modification_results: Dict[str, FieldModificationResult] = {}
     
     def _register_tools(self) -> None:
         """Register all MCP tools."""
         
         @self.server.list_tools()
-        async def list_tools() -> ListToolsResult:
+        async def list_tools():
             """List available tools."""
             return ListToolsResult(
                 tools=[
                     Tool(
-                        name="generate_bem_names",
+                        name="extract_pdf_fields",
                         description=(
-                            "🚀 Generate BEM-style field names for PDF forms using financial "
-                            "services naming conventions. Analyzes form structure and creates "
-                            "consistent, meaningful API names."
+                            "📋 Extract form field information from PDF files. Returns a "
+                            "structured list of all form fields with their types, names, and "
+                            "properties for Claude Desktop to analyze and generate BEM names."
                         ),
-                        inputSchema=GenerateBEMNamesInput.model_json_schema(),
+                        inputSchema=ExtractPDFFieldsInput.model_json_schema(),
                     ),
                     Tool(
                         name="modify_form_fields",
@@ -123,37 +108,44 @@ class PDFEnrichmentServer:
                         ),
                         inputSchema=ModifyFormFieldsInput.model_json_schema(),
                     ),
-                    Tool(
-                        name="batch_analyze_forms",
-                        description=(
-                            "📊 Analyze multiple PDF forms in batch, generating consistent BEM "
-                            "names across all forms. Includes cross-form consistency checking "
-                            "and summary reporting."
-                        ),
-                        inputSchema=BatchAnalysisInput.model_json_schema(),
-                    ),
                 ]
             )
+        
+        @self.server.list_prompts()
+        async def list_prompts():
+            """List available prompts."""
+            return ListPromptsResult(prompts=[])
+        
+        @self.server.list_resources()
+        async def list_resources():
+            """List available resources."""
+            return ListResourcesResult(resources=[])
         
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             """Handle tool calls."""
             try:
-                if name == "generate_bem_names":
-                    return await self._generate_bem_names(
-                        GenerateBEMNamesInput(**arguments)
+                if name == "extract_pdf_fields":
+                    return await self._extract_pdf_fields(
+                        ExtractPDFFieldsInput(**arguments)
                     )
                 elif name == "modify_form_fields":
                     return await self._modify_form_fields(
                         ModifyFormFieldsInput(**arguments)
                     )
-                elif name == "batch_analyze_forms":
-                    return await self._batch_analyze_forms(
-                        BatchAnalysisInput(**arguments)
-                    )
                 else:
                     raise ValueError(f"Unknown tool: {name}")
             
+            except ValueError as e:
+                logger.error(f"Invalid arguments for tool {name}: {e}")
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=f"❌ Invalid arguments for {name}: {str(e)}"
+                        )
+                    ]
+                )
             except Exception as e:
                 logger.exception(f"Error in tool {name}")
                 return CallToolResult(
@@ -165,8 +157,8 @@ class PDFEnrichmentServer:
                     ]
                 )
     
-    async def _generate_bem_names(self, input_data: GenerateBEMNamesInput) -> CallToolResult:
-        """Generate BEM names for PDF form fields."""
+    async def _extract_pdf_fields(self, input_data: ExtractPDFFieldsInput) -> CallToolResult:
+        """Extract form field information from PDF files."""
         try:
             # Read PDF file
             pdf_path = Path(input_data.pdf_filename)
@@ -180,52 +172,60 @@ class PDFEnrichmentServer:
                     ]
                 )
             
-            # Analyze form structure
-            logger.info(f"Analyzing form structure for {pdf_path}")
-            form_analysis = await self.field_analyzer.analyze_form(
-                pdf_path=pdf_path,
-                analysis_mode=input_data.analysis_mode,
-                custom_sections=input_data.custom_sections
-            )
+            # Extract form fields (simplified)
+            logger.info(f"Extracting form fields from {pdf_path}")
+            form_fields = await self.field_analyzer.extract_form_fields(pdf_path)
             
-            # Cache analysis result
-            self.analysis_cache[input_data.pdf_filename] = form_analysis
+            # Create field summary
+            field_summary = self._format_field_summary(form_fields, pdf_path.name)
             
-            # Generate HTML preview
-            html_preview = self.preview_generator.generate_field_review_html(
-                form_analysis=form_analysis
-            )
-            
-            # Create summary text
-            summary_text = self._format_analysis_summary(form_analysis)
-            
-            # Generate downloadable JSON
-            json_output = form_analysis.model_dump(mode="json")
+            # Generate downloadable JSON with field data
+            json_output = {
+                "filename": pdf_path.name,
+                "total_fields": len(form_fields),
+                "fields": [field.model_dump() for field in form_fields]
+            }
             
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=summary_text
+                        text=field_summary
                     ),
                     TextContent(
                         type="text",
-                        text=f"📄 **Interactive Field Review**\n\n{html_preview}"
-                    ),
-                    TextContent(
-                        type="text",
-                        text=f"📥 **Download JSON Mapping**\n\n```json\n{json.dumps(json_output, indent=2)}\n```"
+                        text=f"📥 **Field Data (JSON)**\n\n```json\n{json.dumps(json_output, indent=2)}\n```"
                     )
                 ]
             )
         
-        except Exception as e:
-            logger.exception("Error generating BEM names")
+        except FileNotFoundError as e:
+            logger.error(f"PDF file not found: {e}")
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=f"❌ Failed to generate BEM names: {str(e)}"
+                        text=f"❌ PDF file not found: {input_data.pdf_filename}"
+                    )
+                ]
+            )
+        except PermissionError as e:
+            logger.error(f"Permission denied accessing PDF: {e}")
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"❌ Permission denied accessing PDF file: {input_data.pdf_filename}"
+                    )
+                ]
+            )
+        except Exception as e:
+            logger.exception("Error extracting PDF fields")
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"❌ Failed to extract PDF fields: {str(e)}"
                     )
                 ]
             )
@@ -266,38 +266,45 @@ class PDFEnrichmentServer:
             # Generate success summary
             success_text = self._format_modification_summary(modification_result)
             
-            # Generate visual preview if successful
-            preview_content = []
-            if modification_result.success:
-                try:
-                    preview_html = self.preview_generator.generate_modification_preview(
-                        modification_result=modification_result
-                    )
-                    preview_content.append(
-                        TextContent(
-                            type="text",
-                            text=f"🎯 **Field Modification Preview**\n\n{preview_html}"
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to generate preview: {e}")
-                    preview_content.append(
-                        TextContent(
-                            type="text",
-                            text="⚠️ Preview generation failed, but PDF modification was successful."
-                        )
-                    )
-            
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
                         text=success_text
-                    ),
-                    *preview_content
+                    )
                 ]
             )
         
+        except FileNotFoundError as e:
+            logger.error(f"PDF file not found: {e}")
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"❌ PDF file not found: {input_data.pdf_filename}"
+                    )
+                ]
+            )
+        except PermissionError as e:
+            logger.error(f"Permission denied accessing PDF: {e}")
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"❌ Permission denied accessing PDF file: {input_data.pdf_filename}"
+                    )
+                ]
+            )
+        except ValueError as e:
+            logger.error(f"Invalid field mappings: {e}")
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"❌ Invalid field mappings: {str(e)}"
+                    )
+                ]
+            )
         except Exception as e:
             logger.exception("Error modifying form fields")
             return CallToolResult(
@@ -309,123 +316,41 @@ class PDFEnrichmentServer:
                 ]
             )
     
-    async def _batch_analyze_forms(self, input_data: BatchAnalysisInput) -> CallToolResult:
-        """Analyze multiple PDF forms in batch."""
-        try:
-            # Validate all files exist
-            pdf_paths = []
-            missing_files = []
-            
-            for filename in input_data.pdf_filenames:
-                pdf_path = Path(filename)
-                if pdf_path.exists():
-                    pdf_paths.append(pdf_path)
-                else:
-                    missing_files.append(filename)
-            
-            if missing_files:
-                return CallToolResult(
-                    content=[
-                        TextContent(
-                            type="text",
-                            text=f"❌ Missing PDF files: {', '.join(missing_files)}"
-                        )
-                    ]
-                )
-            
-            # Analyze all forms
-            logger.info(f"Batch analyzing {len(pdf_paths)} forms")
-            batch_analysis = await self.field_analyzer.batch_analyze_forms(
-                pdf_paths=pdf_paths,
-                consistency_check=input_data.consistency_check
-            )
-            
-            # Generate batch summary
-            summary_text = self._format_batch_summary(batch_analysis)
-            
-            # Generate batch review HTML
-            if input_data.generate_summary:
-                batch_html = self.preview_generator.generate_batch_review_html(
-                    batch_analysis=batch_analysis
-                )
-                
-                return CallToolResult(
-                    content=[
-                        TextContent(
-                            type="text",
-                            text=summary_text
-                        ),
-                        TextContent(
-                            type="text",
-                            text=f"📋 **Batch Analysis Report**\n\n{batch_html}"
-                        ),
-                        TextContent(
-                            type="text",
-                            text=f"📥 **Download Batch Results**\n\n```json\n{json.dumps(batch_analysis.model_dump(), indent=2)}\n```"
-                        )
-                    ]
-                )
-            else:
-                return CallToolResult(
-                    content=[
-                        TextContent(
-                            type="text",
-                            text=summary_text
-                        )
-                    ]
-                )
-        
-        except Exception as e:
-            logger.exception("Error in batch analysis")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ Failed to perform batch analysis: {str(e)}"
-                    )
-                ]
-            )
     
-    def _format_analysis_summary(self, analysis: FormAnalysis) -> str:
-        """Format form analysis summary."""
-        confidence_high = analysis.confidence_summary.get("high", 0)
-        confidence_medium = analysis.confidence_summary.get("medium", 0)
-        confidence_low = analysis.confidence_summary.get("low", 0)
+    def _format_field_summary(self, fields: List[FormField], filename: str) -> str:
+        """Format field extraction summary."""
+        # Count field types
+        field_type_counts = {}
+        for field in fields:
+            field_type = field.field_type.value
+            field_type_counts[field_type] = field_type_counts.get(field_type, 0) + 1
         
         # Get top field types
         top_types = sorted(
-            analysis.field_type_distribution.items(),
+            field_type_counts.items(),
             key=lambda x: x[1],
             reverse=True
-        )[:3]
+        )[:5]
         
-        summary = f"""## 🚀 BEM Field Analysis Complete
+        # Sample field names
+        sample_fields = fields[:10]
+        
+        summary = f"""## 📋 PDF Field Extraction Complete
 
-**Form:** {analysis.filename}
-**Total Fields:** {analysis.total_fields}
-**Form Type:** {analysis.form_type or 'Auto-detected'}
+**Form:** {filename}
+**Total Fields:** {len(fields)}
 
-### 📊 Confidence Distribution
-- **High Confidence:** {confidence_high} fields ({confidence_high/analysis.total_fields*100:.1f}%)
-- **Medium Confidence:** {confidence_medium} fields ({confidence_medium/analysis.total_fields*100:.1f}%)
-- **Low Confidence:** {confidence_low} fields ({confidence_low/analysis.total_fields*100:.1f}%)
+### 📊 Field Type Distribution
+{chr(10).join(f"- **{field_type}:** {count} fields" for field_type, count in top_types)}
 
-### 📋 Field Type Distribution
-{chr(10).join(f"- **{field_type.value}:** {count} fields" for field_type, count in top_types)}
-
-### 🎯 Quality Metrics
-- **Naming Conflicts:** {len(analysis.naming_conflicts)} fields
-- **Missing Sections:** {len(analysis.missing_sections)} fields
-- **Review Required:** {len(analysis.review_required)} fields
-
-### 📝 Sample BEM Names
-{chr(10).join(f"- `{bem.original_name}` → `{bem.bem_name}` ({bem.confidence})" for bem in analysis.bem_mappings[:5])}
+### 📝 Sample Field Names
+{chr(10).join(f"- `{field.name}` ({field.field_type.value})" for field in sample_fields)}
 
 ---
 **Next Steps:**
-1. Review the interactive field table below
-2. Edit any BEM names that need adjustment
-3. Use the `modify_form_fields` tool to apply changes
+1. Review the field data in the JSON below
+2. Generate BEM names for these fields
+3. Use the `modify_form_fields` tool to apply your generated names
 """
         
         return summary
@@ -473,49 +398,32 @@ class PDFEnrichmentServer:
         
         return summary
     
-    def _format_batch_summary(self, batch_analysis: Any) -> str:
-        """Format batch analysis summary."""
-        total_confidence = batch_analysis.overall_confidence
-        
-        summary = f"""## 📊 Batch Analysis Complete
-
-**Forms Analyzed:** {batch_analysis.total_forms}
-**Total Fields:** {batch_analysis.total_fields}
-**Analysis Time:** {batch_analysis.generated_at}
-
-### 🎯 Overall Confidence
-- **High:** {total_confidence.get('high', 0)} fields ({total_confidence.get('high', 0)/batch_analysis.total_fields*100:.1f}%)
-- **Medium:** {total_confidence.get('medium', 0)} fields ({total_confidence.get('medium', 0)/batch_analysis.total_fields*100:.1f}%)
-- **Low:** {total_confidence.get('low', 0)} fields ({total_confidence.get('low', 0)/batch_analysis.total_fields*100:.1f}%)
-
-### 📋 Form Summary
-{chr(10).join(f"- **{form.filename}**: {form.total_fields} fields, {form.form_type or 'Auto-detected'}" for form in batch_analysis.forms[:10])}
-
-### 🔄 Consistency Analysis
-- **Common Patterns:** {len(batch_analysis.common_patterns)} patterns identified
-- **Naming Consistency:** {len(batch_analysis.naming_consistency)} similarity scores calculated
-
----
-**Review the detailed analysis below for each form.**
-"""
-        
-        return summary
     
     async def run(self) -> None:
         """Run the MCP server."""
         setup_logging(level=logging.INFO)
         logger.info("Starting PDF Enrichment MCP Server...")
         
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="pdf-enrichment",
-                    server_version="0.1.0",
-                    capabilities=self.server.get_capabilities(),
-                ),
-            )
+        try:
+            async with stdio_server() as (read_stream, write_stream):
+                logger.info("Connected to stdio streams")
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    InitializationOptions(
+                        server_name="pdf-enrichment",
+                        server_version="0.1.0",
+                        capabilities=ServerCapabilities(
+                            tools={},
+                            resources={},
+                            prompts={},
+                            experimental={}
+                        )
+                    ),
+                )
+        except Exception as e:
+            logger.exception(f"Error running MCP server: {e}")
+            raise
 
 
 async def main() -> None:

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from PyPDFForm import PdfWrapper
-from PyPDFForm.exceptions import InvalidEditableArgumentError, InvalidFormError
 
 from .field_types import FieldModificationResult, FieldType
 from .utils import backup_file, validate_file_path
@@ -99,7 +98,7 @@ class PDFModifier:
             try:
                 pdf = PdfWrapper(str(pdf_path))
             except Exception as e:
-                raise InvalidFormError(f"Failed to load PDF: {str(e)}") from e
+                raise RuntimeError(f"Failed to load PDF: {str(e)}") from e
             
             # Get initial field count
             field_count_before = len(pdf.widgets)
@@ -151,10 +150,47 @@ class PDFModifier:
             logger.info(f"Field modification completed: {len(modifications)} changes, {len(errors)} errors")
             return result
             
+        except FileNotFoundError as e:
+            logger.error(f"PDF file not found: {pdf_path}")
+            return FieldModificationResult(
+                original_pdf_path=str(pdf_path),
+                modified_pdf_path=str(output_path) if output_path else "",
+                modifications=[],
+                success=False,
+                errors=[f"PDF file not found: {pdf_path}"],
+                warnings=[],
+                timestamp=timestamp,
+                field_count_before=0,
+                field_count_after=0,
+            )
+        except PermissionError as e:
+            logger.error(f"Permission denied accessing PDF: {pdf_path}")
+            return FieldModificationResult(
+                original_pdf_path=str(pdf_path),
+                modified_pdf_path=str(output_path) if output_path else "",
+                modifications=[],
+                success=False,
+                errors=[f"Permission denied accessing PDF: {pdf_path}"],
+                warnings=[],
+                timestamp=timestamp,
+                field_count_before=0,
+                field_count_after=0,
+            )
+        except ValueError as e:
+            logger.error(f"Invalid field mappings for {pdf_path}: {e}")
+            return FieldModificationResult(
+                original_pdf_path=str(pdf_path),
+                modified_pdf_path=str(output_path) if output_path else "",
+                modifications=[],
+                success=False,
+                errors=[f"Invalid field mappings: {str(e)}"],
+                warnings=[],
+                timestamp=timestamp,
+                field_count_before=0,
+                field_count_after=0,
+            )
         except Exception as e:
             logger.exception(f"Error modifying fields in {pdf_path}")
-            
-            # Create error result
             return FieldModificationResult(
                 original_pdf_path=str(pdf_path),
                 modified_pdf_path=str(output_path) if output_path else "",
@@ -254,17 +290,26 @@ class PDFModifier:
                     else:
                         errors.append(f"Failed to rename '{original_name}' to '{bem_name}': field not found after rename")
                 
-                except Exception as e:
+                except (AttributeError, ValueError) as e:
                     errors.append(f"Failed to rename '{original_name}' to '{bem_name}': {str(e)}")
+                except Exception as e:
+                    errors.append(f"Unexpected error renaming '{original_name}' to '{bem_name}': {str(e)}")
+                    logger.exception(f"Unexpected error during field rename: {original_name} -> {bem_name}")
                     
-            except Exception as e:
+            except (AttributeError, ValueError, TypeError) as e:
                 errors.append(f"Error processing field '{original_name}': {str(e)}")
+            except Exception as e:
+                errors.append(f"Unexpected error processing field '{original_name}': {str(e)}")
+                logger.exception(f"Unexpected error processing field: {original_name}")
         
         # Commit all widget key updates
         try:
             pdf.commit_widget_key_updates()
-        except Exception as e:
+        except (AttributeError, ValueError) as e:
             warnings.append(f"Warning during commit: {str(e)}")
+        except Exception as e:
+            warnings.append(f"Unexpected error during commit: {str(e)}")
+            logger.exception("Unexpected error during widget key updates commit")
         
         return modifications, errors, warnings
     

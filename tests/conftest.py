@@ -1,5 +1,6 @@
 """
 Test configuration and fixtures for PDF enrichment tests.
+Simplified for Claude Desktop integration.
 """
 
 import json
@@ -9,14 +10,11 @@ from typing import Dict, Generator, List
 
 import pytest
 import pytest_asyncio
-from PyPDFForm import PdfWrapper
 
 from src.pdf_enrichment.field_types import (
-    BEMNamingResult,
     FieldModificationResult,
     FieldPosition,
     FieldType,
-    FormAnalysis,
     FormField,
 )
 
@@ -33,76 +31,15 @@ def sample_form_field() -> FormField:
     """Create a sample form field for testing."""
     return FormField(
         id=1,
-        type=FieldType.TEXT_FIELD,
-        form_id=1,
-        section_id=1,
-        parent_id=None,
-        order=1.0,
-        label="First Name",
-        api_name="firstName",
-        custom=False,
-        uuid="field_1",
-        position=FieldPosition(x=100, y=200, width=150, height=25, page=0),
-        unified_field_id=1,
-    )
-
-
-@pytest.fixture
-def sample_bem_result() -> BEMNamingResult:
-    """Create a sample BEM naming result for testing."""
-    return BEMNamingResult(
-        original_name="firstName",
-        bem_name="owner-information_first-name",
-        confidence="high",
-        reasoning="Standard personal information field",
-        section="owner-information",
+        name="firstName",
         field_type=FieldType.TEXT_FIELD,
-        is_radio_group=False,
-        needs_review=False,
-    )
-
-
-@pytest.fixture
-def sample_form_analysis() -> FormAnalysis:
-    """Create a sample form analysis for testing."""
-    field = FormField(
-        id=1,
-        type=FieldType.TEXT_FIELD,
-        form_id=1,
-        section_id=1,
-        parent_id=None,
-        order=1.0,
         label="First Name",
-        api_name="firstName",
-        custom=False,
-        uuid="field_1",
         position=FieldPosition(x=100, y=200, width=150, height=25, page=0),
-        unified_field_id=1,
-    )
-    
-    bem_result = BEMNamingResult(
-        original_name="firstName",
-        bem_name="owner-information_first-name",
-        confidence="high",
-        reasoning="Standard personal information field",
-        section="owner-information",
-        field_type=FieldType.TEXT_FIELD,
-        is_radio_group=False,
-        needs_review=False,
-    )
-    
-    return FormAnalysis(
-        filename="test_form.pdf",
-        form_type="Test Form",
-        form_id="TEST-001",
-        total_fields=1,
-        fields=[field],
-        bem_mappings=[bem_result],
-        confidence_summary={"high": 1, "medium": 0, "low": 0},
-        field_type_distribution={FieldType.TEXT_FIELD: 1},
-        naming_conflicts=[],
-        missing_sections=[],
-        review_required=[],
+        required=False,
+        choices=None,
+        max_length=None,
+        multiline=False,
+        readonly=False,
     )
 
 
@@ -151,6 +88,12 @@ def mock_pdf_wrapper(monkeypatch):
             self.rect = [0, 0, 100, 20]
             self.font = "Helvetica"
             self.font_size = 12
+            self.label = f"Mock {name}"
+            self.required = False
+            self.choices = None
+            self.max_length = None
+            self.multiline = False
+            self.readonly = False
     
     class MockPdfWrapper:
         def __init__(self, pdf_path: str):
@@ -160,15 +103,6 @@ def mock_pdf_wrapper(monkeypatch):
                 "lastName": MockWidget("lastName"),
                 "email": MockWidget("email"),
                 "signature": MockWidget("signature", "Signature"),
-            }
-            self.schema = {
-                "type": "object",
-                "properties": {
-                    "firstName": {"type": "string"},
-                    "lastName": {"type": "string"},
-                    "email": {"type": "string"},
-                    "signature": {"type": "string"},
-                }
             }
         
         def update_widget_key(self, old_name: str, new_name: str) -> None:
@@ -216,7 +150,7 @@ def create_test_pdf(temp_dir: Path) -> callable:
 
 @pytest.fixture
 def sample_pdf_files(create_test_pdf) -> List[Path]:
-    """Create multiple sample PDF files for batch testing."""
+    """Create multiple sample PDF files for testing."""
     files = []
     
     # Form 1: Owner information form
@@ -262,14 +196,21 @@ async def pdf_modifier():
     return PDFModifier()
 
 
-@pytest_asyncio.fixture
-async def preview_generator():
-    """Create a preview generator instance for testing."""
-    from src.pdf_enrichment.preview_generator import PreviewGenerator
-    return PreviewGenerator()
-
-
 # Test data constants
+SAMPLE_FIELD_NAMES = [
+    "firstName",
+    "lastName",
+    "email",
+    "phoneNumber",
+    "streetAddress",
+    "city",
+    "state",
+    "zipCode",
+    "accountNumber",
+    "routingNumber",
+    "signature",
+]
+
 SAMPLE_BEM_NAMES = [
     "owner-information_first-name",
     "owner-information_last-name",
@@ -281,30 +222,7 @@ SAMPLE_BEM_NAMES = [
     "address-information_zip-code",
     "payment-information_account-number",
     "payment-information_routing-number",
-    "beneficiary-information_primary-name",
-    "beneficiary-information_contingent-name",
-    "withdrawal-option_frequency--group",
-    "withdrawal-option_frequency__monthly",
-    "withdrawal-option_frequency__quarterly",
-    "withdrawal-option_amount",
-    "withdrawal-option_amount__gross",
-    "withdrawal-option_amount__net",
     "signatures_owner",
-    "signatures_owner-date",
-    "signatures_witness",
-]
-
-INVALID_BEM_NAMES = [
-    "",  # Empty
-    "invalid",  # No underscore
-    "Invalid_Name",  # Uppercase
-    "block_",  # Missing element
-    "_element",  # Missing block
-    "block_element_modifier",  # Wrong separator
-    "block-element__modifier",  # Wrong block-element separator
-    "class_name",  # Reserved word
-    "block_element__",  # Empty modifier
-    "block_element--",  # Wrong group suffix
 ]
 
 FIELD_TYPE_MAPPINGS = {
@@ -313,4 +231,6 @@ FIELD_TYPE_MAPPINGS = {
     "Radio": FieldType.RADIO_BUTTON,
     "Dropdown": FieldType.DROPDOWN,
     "Signature": FieldType.SIGNATURE,
+    "Button": FieldType.BUTTON,
+    "ListBox": FieldType.LISTBOX,
 }
