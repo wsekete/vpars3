@@ -53,11 +53,7 @@ class ModifyFormFieldsInput(BaseModel):
     )
     output_filename: Optional[str] = Field(
         None,
-        description="Output filename (defaults to '{original}_bem_renamed.pdf')"
-    )
-    preserve_original: bool = Field(
-        True,
-        description="Whether to preserve the original uploaded PDF file"
+        description="Output filename (defaults to 'BEM_renamed.pdf')"
     )
 
 
@@ -88,7 +84,7 @@ class PDFEnrichmentServer:
                 ),
                 Tool(
                     name="modify_form_fields",
-                    description="🔧 Modify uploaded PDF form fields using BEM name mappings from generate_BEM_names",
+                    description="🔧 Apply BEM field mappings to uploaded PDF and download modified version to Downloads folder",
                     inputSchema=ModifyFormFieldsInput.model_json_schema(),
                 ),
             ]
@@ -233,55 +229,181 @@ Please provide:
         """Modify PDF form fields using BEM mappings."""
         logger.info("Modifying uploaded PDF with BEM field mappings")
         
-        # For now, return instructions for the user since PDF modification requires
-        # access to the actual uploaded file which needs special handling
-        instructions = f"""# PDF Field Modification Instructions
+        try:
+            # Find uploaded PDF file in common locations
+            pdf_file_path = await self._find_uploaded_pdf()
+            
+            if not pdf_file_path:
+                return [
+                    TextContent(
+                        type="text",
+                        text=self._get_file_not_found_instructions(input_data)
+                    )
+                ]
+            
+            # Set up output path in Downloads folder
+            downloads_folder = Path.home() / "Downloads"
+            downloads_folder.mkdir(exist_ok=True)
+            
+            # Generate output filename
+            if input_data.output_filename:
+                output_filename = input_data.output_filename
+            else:
+                original_stem = pdf_file_path.stem
+                output_filename = f"{original_stem}_BEM_renamed.pdf"
+            
+            output_path = downloads_folder / output_filename
+            
+            # Perform PDF modification
+            logger.info(f"Modifying PDF: {pdf_file_path} -> {output_path}")
+            modification_result = await self.pdf_modifier.modify_fields(
+                pdf_path=pdf_file_path,
+                field_mappings=input_data.field_mappings,
+                output_path=output_path,
+                preserve_original=True
+            )
+            
+            if modification_result.success:
+                success_message = f"""# ✅ PDF Field Modification Complete!
 
-I have your BEM field mappings ready to apply, but the PDF modification process requires the uploaded PDF to be accessible locally.
+**Original PDF:** {pdf_file_path.name}
+**Modified PDF:** {output_path}
+**Fields Modified:** {len(modification_result.modifications)}
 
-## Your BEM Field Mappings:
-I have **{len(input_data.field_mappings)}** field mappings ready to apply:
+## 🎯 What Was Done:
+- Applied **{len(input_data.field_mappings)}** BEM field name mappings
+- Preserved all field types and functionality
+- Maintained form structure and visual layout
+- Saved modified PDF to your Downloads folder
 
-{chr(10).join(f"- `{original}` → `{bem_name}`" for original, bem_name in list(input_data.field_mappings.items())[:10])}
-{f"... and {len(input_data.field_mappings) - 10} more field mappings" if len(input_data.field_mappings) > 10 else ""}
+## 📥 Download Location:
+The modified PDF is ready at: **{output_path}**
 
-## To Apply These Mappings:
+## 📝 Field Changes Summary:
+{chr(10).join(f"- `{mod['old']}` → `{mod['new']}` ({mod['type']})" for mod in modification_result.modifications[:10])}
+{f"...and {len(modification_result.modifications) - 10} more field mappings applied" if len(modification_result.modifications) > 10 else ""}
 
-### Option 1: Save and Modify Locally
-1. **Save the uploaded PDF** to your local system (Downloads, Desktop, etc.)
-2. **Note the exact filename** you used when saving
-3. **Run this tool again** with the local filename (we'll update this soon)
+## 🎉 Success!
+Your PDF now has properly named BEM fields and is ready for use in your applications!"""
+            
+            else:
+                success_message = f"""# ❌ PDF Field Modification Failed
 
-### Option 2: Use Generated JSON (Recommended)
-You can use the field mappings I generated with any PDF processing tool:
+**Error:** {modification_result.errors[0] if modification_result.errors else 'Unknown error'}
 
+## 🔧 What to Try:
+1. Ensure the PDF is not password protected
+2. Check that the PDF contains form fields
+3. Verify the field mappings are correct
+
+## 📋 Your Field Mappings:
+{chr(10).join(f"- `{original}` → `{bem_name}`" for original, bem_name in list(input_data.field_mappings.items())[:5])}
+{f"... and {len(input_data.field_mappings) - 5} more mappings" if len(input_data.field_mappings) > 5 else ""}"""
+            
+            return [
+                TextContent(
+                    type="text",
+                    text=success_message
+                )
+            ]
+            
+        except Exception as e:
+            logger.exception("Error in PDF modification")
+            return [
+                TextContent(
+                    type="text",
+                    text=f"""# ❌ PDF Modification Error
+
+**Error:** {str(e)}
+
+## 🔧 Troubleshooting:
+1. Ensure you have uploaded a PDF file to this conversation
+2. Check that the PDF is not corrupted or password-protected
+3. Verify the field mappings are in the correct format
+
+## 📋 Your Field Mappings ({len(input_data.field_mappings)} total):
+{chr(10).join(f"- `{original}` → `{bem_name}`" for original, bem_name in list(input_data.field_mappings.items())[:5])}
+{f"... and {len(input_data.field_mappings) - 5} more mappings" if len(input_data.field_mappings) > 5 else ""}"""
+                )
+            ]
+    
+    async def _find_uploaded_pdf(self) -> Optional[Path]:
+        """Find uploaded PDF file in common locations."""
+        from datetime import datetime, timedelta
+        
+        # Common locations where Claude Desktop might store uploaded files
+        search_locations = [
+            Path.home() / "Downloads",
+            Path.home() / "Desktop", 
+            Path("/tmp"),
+            Path("/var/tmp"),
+        ]
+        
+        # Add macOS temp folders if they exist
+        var_folders = Path("/var/folders")
+        if var_folders.exists():
+            for temp_folder in var_folders.glob("*/T/TemporaryItems/NSIRD_*"):
+                if temp_folder.is_dir():
+                    search_locations.append(temp_folder)
+        
+        pdf_files = []
+        
+        for location in search_locations:
+            if location.exists() and location.is_dir():
+                try:
+                    # Find PDF files modified in the last hour (recently uploaded)
+                    one_hour_ago = datetime.now() - timedelta(hours=1)
+                    
+                    for pdf_file in location.glob("*.pdf"):
+                        if pdf_file.is_file():
+                            mod_time = datetime.fromtimestamp(pdf_file.stat().st_mtime)
+                            if mod_time > one_hour_ago:
+                                pdf_files.append((pdf_file, mod_time))
+                except (PermissionError, OSError):
+                    # Skip locations we can't read
+                    continue
+        
+        if pdf_files:
+            # Return the most recently modified PDF file
+            pdf_files.sort(key=lambda x: x[1], reverse=True)
+            return pdf_files[0][0]
+        
+        return None
+    
+    def _get_file_not_found_instructions(self, input_data: ModifyFormFieldsInput) -> str:
+        """Get instructions when PDF file is not found."""
+        return f"""# 📋 PDF File Not Found
+
+I have your **{len(input_data.field_mappings)}** BEM field mappings ready to apply, but I couldn't locate the uploaded PDF file automatically.
+
+## 🔧 How to Apply Your Mappings:
+
+### Option 1: Save PDF to Downloads/Desktop
+1. **Save the uploaded PDF** from this conversation to your Downloads or Desktop folder
+2. **Run this tool again** - it will automatically find and process the PDF
+
+### Option 2: Use the Field Mappings JSON
 ```json
 {{
   "field_mappings": {{
     {chr(10).join(f'    "{original}": "{bem_name}"{"," if i < len(input_data.field_mappings) - 1 else ""}' for i, (original, bem_name) in enumerate(input_data.field_mappings.items()))}
   }},
   "total_mappings": {len(input_data.field_mappings)},
-  "output_filename": "{input_data.output_filename or 'bem_renamed.pdf'}"
+  "output_filename": "{input_data.output_filename or 'BEM_renamed.pdf'}"
 }}
 ```
 
-## What These Mappings Will Do:
-- **Rename all form fields** to use BEM naming conventions
-- **Preserve field types** and functionality (text, radio, checkbox, etc.)
-- **Maintain form structure** and visual layout
-- **Create downloadable PDF** with properly named fields
+## 📝 Your BEM Field Mappings:
+{chr(10).join(f"- `{original}` → `{bem_name}`" for original, bem_name in list(input_data.field_mappings.items())[:10])}
+{f"... and {len(input_data.field_mappings) - 10} more mappings" if len(input_data.field_mappings) > 10 else ""}
 
-## Next Steps:
-The field mapping is complete and ready to apply. The PDF modification functionality will be enhanced to work directly with uploaded files in the next update.
+## 🎯 What These Mappings Will Do:
+- Rename all form fields to use BEM naming conventions
+- Preserve field types and functionality (text, radio, checkbox, etc.)
+- Maintain form structure and visual layout
+- Create a downloadable PDF with properly named fields
 
-**Would you like me to provide the complete field mapping in a different format, or help you with the next steps?**"""
-
-        return [
-            TextContent(
-                type="text",
-                text=instructions
-            )
-        ]
+**Try saving the PDF to your Downloads folder and running this tool again!**"""
     
     def _format_modification_summary(self, result: FieldModificationResult) -> str:
         """Format field modification summary."""
