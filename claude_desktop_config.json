@@ -3,13 +3,23 @@
     "pdf-enrichment": {
       "command": "python",
       "args": [
-        "/Users/wseke/Desktop/vpars3/src/pdf_enrichment/mcp_server.py"
+        "/Users/wseke/Desktop/vpars3/src/pdf_enrichment/mcp_server_v2.py"
       ],
       "cwd": "/Users/wseke/Desktop/vpars3",
       "env": {
         "PYTHONPATH": "/Users/wseke/Desktop/vpars3",
         "PDF_ENRICHMENT_LOG_LEVEL": "INFO"
       }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/Users/wseke/Downloads",
+        "/Users/wseke/Desktop",
+        "/tmp"
+      ]
     }
   }
 }

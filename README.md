@@ -1,19 +1,16 @@
-# PDF Enrichment Platform
+# PDF Field BEM Renamer
 
-🚀 **Transform PDF forms into structured APIs with intelligent BEM-style field naming**
+🚀 **Simple 2-step workflow to rename PDF form fields with intelligent BEM-style naming**
 
-This platform automates the conversion of static PDF forms into cleanly structured APIs by analyzing form fields, generating consistent BEM-style names using financial services conventions, and modifying PDFs while preserving all field properties.
+Transform PDF forms by analyzing field names and generating consistent BEM-style field names using financial services conventions.
 
 ## ✨ Key Features
 
-- **🧠 Intelligent Field Analysis** - AI-powered analysis of PDF forms using Claude's natural language processing
-- **🏷️ BEM Naming Convention** - Generates consistent `block_element__modifier` style names
-- **🔧 Property Preservation** - Maintains all field properties, positions, and types during renaming
-- **📊 Batch Processing** - Analyze and modify multiple PDFs simultaneously
-- **🎯 Quality Metrics** - Confidence scoring and validation for all generated names
-- **🔍 Visual Previews** - Interactive HTML previews of field changes
-- **📋 Claude Desktop Integration** - Seamless workflow with Claude Desktop MCP tools
-- **🚀 Financial Services Optimized** - Specialized naming patterns for financial forms
+- **🧠 AI-Powered Analysis** - Claude Desktop analyzes PDF forms and generates BEM names
+- **📄 JSON Export** - Clean JSON output with all field mappings
+- **🔧 Standalone Modifier** - External tool applies changes using PyPDFForm
+- **🏷️ BEM Convention** - Consistent `block_element__modifier` style names
+- **💾 Auto-Save** - Modified PDFs saved with `__parsed.pdf` suffix
 
 ## 🚀 Quick Start
 
@@ -26,9 +23,6 @@ cd pdf-enrichment-platform
 
 # Install with uv (recommended)
 uv install
-
-# Or with pip
-pip install -e .
 ```
 
 ### 2. Claude Desktop Setup
@@ -55,51 +49,34 @@ Add to your Claude Desktop configuration:
 }
 ```
 
-### 3. Basic Usage
+### 3. Simple 2-Step Workflow
 
-1. **Upload PDF** to Claude Desktop
-2. **Generate BEM Names**: Use `🚀 generate_bem_names` tool
-3. **Review Results**: Edit names in the interactive table
-4. **Apply Changes**: Use `🔧 modify_form_fields` tool
-5. **Download**: Get your renamed PDF
+#### Step 1: Generate BEM Names (in Claude Desktop)
+1. **Upload your PDF** to Claude Desktop
+2. **Use the tool**: `generate_bem_names_and_export_json`
+3. **Copy the JSON output** from the response
 
-## 🛠️ MCP Tools
+#### Step 2: Modify PDF (external command)
+```bash
+# Run the standalone modifier
+python scripts/pdf_bem_modifier.py --pdf ~/Desktop/your-form.pdf --json mappings.json
 
-### 🚀 generate_bem_names
-Analyzes PDF forms and generates BEM-style field names using financial services conventions.
-
-```json
-{
-  "pdf_filename": "form.pdf",
-  "analysis_mode": "comprehensive",
-  "custom_sections": ["owner-information", "beneficiary"]
-}
+# Result: ~/Desktop/your-form__parsed.pdf
 ```
 
-### 🔧 modify_form_fields
-Renames PDF form fields while preserving all properties and positions.
+## 🛠️ Tool Overview
 
-```json
-{
-  "pdf_filename": "form.pdf",
-  "field_mappings": {
-    "firstName": "owner-information_first-name",
-    "lastName": "owner-information_last-name"
-  },
-  "preserve_original": true
-}
-```
+### Claude Desktop Tool: `generate_bem_names_and_export_json`
+- Analyzes uploaded PDF form fields
+- Generates BEM-style names using financial services conventions
+- Outputs comprehensive JSON with all field mappings
+- Includes validation and field count verification
 
-### 📊 batch_analyze_forms
-Analyzes multiple PDFs with consistency checking across forms.
-
-```json
-{
-  "pdf_filenames": ["form1.pdf", "form2.pdf"],
-  "consistency_check": true,
-  "generate_summary": true
-}
-```
+### Standalone Script: `pdf_bem_modifier.py`
+- Takes original PDF and JSON mappings as input
+- Uses PyPDFForm to rename fields while preserving properties
+- Saves modified PDF with `__parsed.pdf` suffix in same directory
+- Provides detailed progress and error reporting
 
 ## 🎯 BEM Naming Convention
 
@@ -114,271 +91,101 @@ Analyzes multiple PDFs with consistency checking across forms.
 owner-information_first-name
 owner-information_last-name
 beneficiary_withdrawal-frequency__monthly
-beneficiary_withdrawal-frequency__annually
 payment-method--group
-payment-method_type__ach
-payment-method_type__wire
+payment-method__ach
 signatures_owner-signature
-signatures_owner-date
 ```
 
-## 📋 Field Types Supported
+## 📋 Sample JSON Output
 
-| Type | Description | BEM Pattern |
-|------|-------------|-------------|
-| **TextField** | Text input fields | `block_element` |
-| **Checkbox** | Individual checkboxes | `block_element` |
-| **RadioGroup** | Radio button containers | `block_element--group` |
-| **RadioButton** | Individual radio options | `block_element__option` |
-| **Dropdown** | Dropdown/select fields | `block_element` |
-| **Signature** | Signature fields | `block_signature` |
-| **SignatureDate** | Signature date fields | `block_signature-date` |
+```json
+{
+  "source_filename": "Life-1528-Q.pdf",
+  "analysis_timestamp": "2024-01-15T10:30:00Z",
+  "total_fields": 67,
+  "bem_mappings": {
+    "first_name": "owner-information_first-name",
+    "last_name": "owner-information_last-name",
+    "policy_number": "owner-information_policy-number",
+    "dividend_accumulate": "dividend-option__accumulate-interest",
+    "dividend_reduce_premium": "dividend-option__reduce-premium",
+    "payment_method_ach": "payment-method__ach",
+    "owner_signature": "signatures_owner-signature",
+    "owner_signature_date": "signatures_owner-date"
+  }
+}
+```
 
-## 🏗️ Architecture
+## 🔧 Command Line Usage
 
-### Phase 1: MCP Tools & Analysis
-- **Field Analysis Engine**: Extracts and categorizes PDF form fields
-- **BEM Naming Engine**: Generates consistent names using financial patterns
-- **Claude Integration**: Seamless workflow with Claude Desktop
+```bash
+# Basic usage
+python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json
 
-### Phase 2: PDF Modification
-- **Property Preservation**: Maintains all field attributes during renaming
-- **Validation System**: Ensures no fields are lost or corrupted
-- **Preview Generation**: Creates visual previews of changes
+# With specific output directory
+python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json --output ~/Documents/
 
-### Phase 3: Integration & Deployment
-- **CLI Interface**: Batch processing capabilities
-- **Web Interface**: Browser-based form review
-- **API Integration**: ReTool and external system connectivity
+# Dry run (preview changes without modifying)
+python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json --dry-run
+```
 
 ## 📊 Project Structure
 
 ```
 pdf-enrichment-platform/
 ├── src/pdf_enrichment/
-│   ├── mcp_server.py          # Main MCP server
+│   ├── mcp_server.py          # Single Claude Desktop tool
 │   ├── field_analyzer.py      # PDF field analysis
-│   ├── pdf_modifier.py        # PDF field modification
+│   ├── pdf_modifier.py        # PDF modification logic
 │   ├── field_types.py         # Type definitions
-│   ├── bem_naming.py          # BEM naming engine
-│   ├── preview_generator.py   # HTML preview generation
 │   └── utils.py               # Utility functions
-├── src/cli/
-│   ├── main.py                # CLI interface
-│   └── batch_processor.py     # Batch operations
-├── src/web/
-│   ├── app.py                 # FastAPI web interface
-│   └── templates/             # HTML templates
+├── scripts/
+│   └── pdf_bem_modifier.py    # Standalone PDF modifier
 ├── tests/                     # Test suite
-├── docs/                      # Documentation
 └── examples/                  # Sample files
-```
-
-## 🔧 CLI Usage
-
-```bash
-# Single PDF analysis
-pdf-enrichment analyze form.pdf
-
-# Batch processing
-pdf-enrichment batch-analyze *.pdf
-
-# Apply BEM renaming
-pdf-enrichment modify form.pdf --mappings mappings.json
-
-# Generate preview
-pdf-enrichment preview form.pdf --output preview.html
-```
-
-## 🌐 Web Interface
-
-Launch the web interface for interactive form review:
-
-```bash
-# Start web server
-pdf-enrichment web --port 8000
-
-# Open browser
-open http://localhost:8000
 ```
 
 ## 🧪 Testing
 
 ```bash
-# Run all tests
-uv run pytest
-
-# Run with coverage
-uv run pytest --cov=src/pdf_enrichment
-
-# Run specific test categories
-uv run pytest tests/test_field_analyzer.py
-uv run pytest tests/test_pdf_modifier.py
-```
-
-## 📈 Quality Metrics
-
-### Confidence Scoring
-- **High (≥80%)**: Well-identified fields with clear sections
-- **Medium (50-79%)**: Reasonable matches requiring minor review
-- **Low (<50%)**: Ambiguous fields needing manual attention
-
-### Validation Checks
-- ✅ BEM format compliance
-- ✅ Field count preservation
-- ✅ Property retention
-- ✅ Naming conflict detection
-- ✅ Cross-form consistency
-
-## 🔍 Examples
-
-### Input PDF Fields
-```
-firstName
-lastName
-streetAddress
-city
-state
-zipCode
-primaryBeneficiary
-contingentBeneficiary
-signatureDate
-```
-
-### Generated BEM Names
-```
-owner-information_first-name
-owner-information_last-name
-address-information_street-address
-address-information_city
-address-information_state
-address-information_zip-code
-beneficiary_primary-name
-beneficiary_contingent-name
-signatures_owner-date
-```
-
-### Confidence Analysis
-```
-High Confidence: 7 fields (77.8%)
-Medium Confidence: 2 fields (22.2%)
-Low Confidence: 0 fields (0.0%)
-```
-
-## 🚀 Advanced Features
-
-### Custom Section Mapping
-```python
-custom_sections = {
-    "applicant": "owner-information",
-    "beneficiaries": "beneficiary",
-    "banking": "payment-information"
-}
-```
-
-### Field Property Preservation
-```python
-preserve_properties = {
-    "font": True,
-    "font_size": True,
-    "position": True,
-    "validation": True,
-    "required": True
-}
-```
-
-### Batch Consistency Checking
-```python
-consistency_rules = {
-    "similar_fields": True,
-    "naming_patterns": True,
-    "cross_form_validation": True
-}
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Setup
-
-```bash
-# Clone and install
-git clone https://github.com/yourorg/pdf-enrichment-platform.git
-cd pdf-enrichment-platform
-uv install --dev
-
-# Install pre-commit hooks
-uv run pre-commit install
-
 # Run tests
 uv run pytest
+
+# Test with sample PDF
+python scripts/pdf_bem_modifier.py --pdf examples/sample_form.pdf --json examples/sample_mappings.json --dry-run
 ```
-
-### Code Quality
-
-- **Formatting**: `uv run ruff format .`
-- **Linting**: `uv run ruff check .`
-- **Type Checking**: `uv run pyright`
-- **Testing**: `uv run pytest`
-
-## 📚 Documentation
-
-- [Setup Guide](docs/setup.md)
-- [Claude Desktop Integration](docs/claude_desktop_config.md)
-- [API Reference](docs/api_reference.md)
-- [BEM Naming Conventions](docs/bem_conventions.md)
-- [Field Analysis Guide](docs/field_analysis.md)
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-**Claude Desktop not finding tools:**
+**Claude Desktop not finding tool:**
 ```bash
-# Verify MCP server path
+# Verify MCP server
 python -m pdf_enrichment.mcp_server
 
-# Check Claude Desktop config
+# Check config path
 cat ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
 **PDF modification errors:**
 ```bash
-# Check PDF file permissions
+# Check file permissions
 ls -la your-file.pdf
 
 # Verify PyPDFForm installation
 python -c "import PyPDFForm; print('OK')"
 ```
 
-**Field analysis failures:**
-```bash
-# Enable debug logging
-export PDF_ENRICHMENT_LOG_LEVEL=DEBUG
-
-# Test with sample PDF
-pdf-enrichment analyze examples/sample_form.pdf --debug
-```
+**Missing output file:**
+- Check that input PDF path is correct
+- Ensure you have write permissions to the directory
+- Verify JSON mappings file exists and is valid
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
-
-- **PyPDFForm** - PDF form manipulation library
-- **Claude Desktop** - AI-powered form analysis
-- **MCP Protocol** - Tool integration framework
-- **Financial Services Community** - Domain expertise and conventions
-
-## 🔗 Links
-
-- [GitHub Repository](https://github.com/yourorg/pdf-enrichment-platform)
-- [Documentation](https://pdf-enrichment-platform.readthedocs.io)
-- [Issue Tracker](https://github.com/yourorg/pdf-enrichment-platform/issues)
-- [Discussions](https://github.com/yourorg/pdf-enrichment-platform/discussions)
-
 ---
 
-**Transform your PDF forms into structured APIs with intelligent BEM naming! 🚀**
+**Simple, clean PDF field renaming with BEM conventions! 🚀**

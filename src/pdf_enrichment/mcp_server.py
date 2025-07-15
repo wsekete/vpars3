@@ -1,8 +1,8 @@
 """
-MCP Server for PDF Form Field Enrichment
+MCP Server for PDF Form Field BEM Renaming
 
-This server provides tools for analyzing PDF forms and generating BEM-style field names
-using Claude's natural language processing capabilities.
+Simple single-tool server that analyzes PDF forms and generates BEM-style field names
+with JSON export for use with external PDF modification tools.
 """
 
 import asyncio
@@ -34,8 +34,6 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.pdf_enrichment.field_analyzer import FieldAnalyzer
-from src.pdf_enrichment.field_types import FormField, FieldModificationResult
-from src.pdf_enrichment.pdf_modifier import PDFModifier
 from src.pdf_enrichment.utils import setup_logging
 
 
@@ -43,47 +41,28 @@ from src.pdf_enrichment.utils import setup_logging
 logger = logging.getLogger(__name__)
 
 
-class ExtractPDFFieldsInput(BaseModel):
-    """Input for extract_pdf_fields tool."""
+class GenerateBEMNamesInput(BaseModel):
+    """Input for generate_bem_names_and_export_json tool."""
     
     pdf_filename: str = Field(description="Name of the PDF file uploaded to Claude Desktop")
-
-
-class ModifyFormFieldsInput(BaseModel):
-    """Input for modify_form_fields tool."""
-    
-    pdf_filename: str = Field(description="Name of the PDF file to modify")
-    field_mappings: Dict[str, str] = Field(
-        description="Mapping of original field names to new BEM names"
-    )
-    output_filename: Optional[str] = Field(
+    custom_context: Optional[str] = Field(
         None,
-        description="Output filename (defaults to {original}_bem_renamed.pdf)"
+        description="Optional context about the PDF form (e.g., 'Life Insurance Service Request', 'Retirement Plan Form')"
     )
-    preserve_original: bool = Field(
-        True,
-        description="Whether to preserve the original PDF file"
-    )
-
-
 
 
 class PDFEnrichmentServer:
-    """MCP Server for PDF Form Field Enrichment."""
+    """Simple MCP Server for PDF Form Field BEM Naming."""
     
     def __init__(self) -> None:
-        self.server = Server("pdf-enrichment", version="0.1.0")
+        self.server = Server("pdf-enrichment", version="0.2.0")
         self.field_analyzer = FieldAnalyzer()
-        self.pdf_modifier = PDFModifier()
         
-        # Register tools
+        # Register single tool
         self._register_tools()
-        
-        # Server state
-        self.modification_results: Dict[str, FieldModificationResult] = {}
     
     def _register_tools(self) -> None:
-        """Register all MCP tools."""
+        """Register the single MCP tool."""
         
         @self.server.list_tools()
         async def list_tools():
@@ -91,22 +70,14 @@ class PDFEnrichmentServer:
             return ListToolsResult(
                 tools=[
                     Tool(
-                        name="extract_pdf_fields",
+                        name="generate_bem_names_and_export_json",
                         description=(
-                            "📋 Extract form field information from PDF files. Returns a "
-                            "structured list of all form fields with their types, names, and "
-                            "properties for Claude Desktop to analyze and generate BEM names."
+                            "🚀 Analyze PDF form fields and generate BEM-style names with JSON export. "
+                            "This tool extracts all form fields, analyzes them for structure and purpose, "
+                            "then generates comprehensive BEM naming mappings that can be used with "
+                            "external PDF modification tools."
                         ),
-                        inputSchema=ExtractPDFFieldsInput.model_json_schema(),
-                    ),
-                    Tool(
-                        name="modify_form_fields",
-                        description=(
-                            "🔧 Modify PDF form fields using BEM name mappings. Renames fields "
-                            "while preserving all properties, positions, and types. Creates a "
-                            "new PDF with properly named fields."
-                        ),
-                        inputSchema=ModifyFormFieldsInput.model_json_schema(),
+                        inputSchema=GenerateBEMNamesInput.model_json_schema(),
                     ),
                 ]
             )
@@ -125,13 +96,9 @@ class PDFEnrichmentServer:
         async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             """Handle tool calls."""
             try:
-                if name == "extract_pdf_fields":
-                    return await self._extract_pdf_fields(
-                        ExtractPDFFieldsInput(**arguments)
-                    )
-                elif name == "modify_form_fields":
-                    return await self._modify_form_fields(
-                        ModifyFormFieldsInput(**arguments)
+                if name == "generate_bem_names_and_export_json":
+                    return await self._generate_bem_names_and_export_json(
+                        GenerateBEMNamesInput(**arguments)
                     )
                 else:
                     raise ValueError(f"Unknown tool: {name}")
@@ -157,120 +124,64 @@ class PDFEnrichmentServer:
                     ]
                 )
     
-    async def _extract_pdf_fields(self, input_data: ExtractPDFFieldsInput) -> CallToolResult:
-        """Extract form field information from PDF files."""
+    async def _generate_bem_names_and_export_json(self, input_data: GenerateBEMNamesInput) -> CallToolResult:
+        """Generate BEM field names and export as JSON."""
         try:
-            # Read PDF file
-            pdf_path = Path(input_data.pdf_filename)
-            if not pdf_path.exists():
+            # Try to find PDF file in common locations
+            pdf_path = await self._find_pdf_file(input_data.pdf_filename)
+            if not pdf_path:
                 return CallToolResult(
                     content=[
                         TextContent(
                             type="text",
-                            text=f"❌ PDF file not found: {input_data.pdf_filename}"
+                            text=f"""❌ **PDF File Not Found**: `{input_data.pdf_filename}`
+
+**Searched locations:**
+- Current directory: `./{input_data.pdf_filename}`
+- Downloads: `~/Downloads/{input_data.pdf_filename}`
+- Desktop: `~/Desktop/{input_data.pdf_filename}`
+
+**💡 Solutions:**
+1. Upload the PDF to Claude Desktop (it will be in Downloads)
+2. Ensure the filename is exact (case-sensitive)
+3. Use the full filename including `.pdf` extension"""
                         )
                     ]
                 )
             
-            # Extract form fields (simplified)
+            # Extract form fields
             logger.info(f"Extracting form fields from {pdf_path}")
             form_fields = await self.field_analyzer.extract_form_fields(pdf_path)
             
-            # Create field summary
-            field_summary = self._format_field_summary(form_fields, pdf_path.name)
-            
-            # Generate downloadable JSON with field data
-            json_output = {
-                "filename": pdf_path.name,
-                "total_fields": len(form_fields),
-                "fields": [field.model_dump() for field in form_fields]
-            }
-            
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=field_summary
-                    ),
-                    TextContent(
-                        type="text",
-                        text=f"📥 **Field Data (JSON)**\n\n```json\n{json.dumps(json_output, indent=2)}\n```"
-                    )
-                ]
-            )
-        
-        except FileNotFoundError as e:
-            logger.error(f"PDF file not found: {e}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ PDF file not found: {input_data.pdf_filename}"
-                    )
-                ]
-            )
-        except PermissionError as e:
-            logger.error(f"Permission denied accessing PDF: {e}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ Permission denied accessing PDF file: {input_data.pdf_filename}"
-                    )
-                ]
-            )
-        except Exception as e:
-            logger.exception("Error extracting PDF fields")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ Failed to extract PDF fields: {str(e)}"
-                    )
-                ]
-            )
-    
-    async def _modify_form_fields(self, input_data: ModifyFormFieldsInput) -> CallToolResult:
-        """Modify PDF form fields using BEM mappings."""
-        try:
-            # Validate input
-            pdf_path = Path(input_data.pdf_filename)
-            if not pdf_path.exists():
+            if not form_fields:
                 return CallToolResult(
                     content=[
                         TextContent(
                             type="text",
-                            text=f"❌ PDF file not found: {input_data.pdf_filename}"
+                            text=f"""❌ **No Form Fields Found**
+
+The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
+
+**This could mean:**
+- The PDF is a scanned image (not interactive)
+- The PDF has no AcroForm fields
+- The PDF uses a different form technology
+
+**💡 Try:**
+- Using a different PDF with interactive form fields
+- Converting scanned PDFs to fillable forms first"""
                         )
                     ]
                 )
             
-            # Generate output filename
-            if input_data.output_filename:
-                output_path = Path(input_data.output_filename)
-            else:
-                output_path = pdf_path.with_stem(f"{pdf_path.stem}_bem_renamed")
-            
-            # Perform field modifications
-            logger.info(f"Modifying fields in {pdf_path}")
-            modification_result = await self.pdf_modifier.modify_fields(
-                pdf_path=pdf_path,
-                field_mappings=input_data.field_mappings,
-                output_path=output_path,
-                preserve_original=input_data.preserve_original
-            )
-            
-            # Cache modification result
-            self.modification_results[input_data.pdf_filename] = modification_result
-            
-            # Generate success summary
-            success_text = self._format_modification_summary(modification_result)
+            # Generate embedded BEM naming prompt
+            bem_analysis_prompt = self._create_bem_analysis_prompt(form_fields, pdf_path.name, input_data.custom_context)
             
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=success_text
+                        text=bem_analysis_prompt
                     )
                 ]
             )
@@ -285,124 +196,145 @@ class PDFEnrichmentServer:
                     )
                 ]
             )
-        except PermissionError as e:
-            logger.error(f"Permission denied accessing PDF: {e}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ Permission denied accessing PDF file: {input_data.pdf_filename}"
-                    )
-                ]
-            )
-        except ValueError as e:
-            logger.error(f"Invalid field mappings: {e}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=f"❌ Invalid field mappings: {str(e)}"
-                    )
-                ]
-            )
         except Exception as e:
-            logger.exception("Error modifying form fields")
+            logger.exception("Error generating BEM names")
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=f"❌ Failed to modify form fields: {str(e)}"
+                        text=f"❌ Failed to analyze PDF: {str(e)}"
                     )
                 ]
             )
     
+    async def _find_pdf_file(self, filename: str) -> Optional[Path]:
+        """Find PDF file in common locations."""
+        search_locations = [
+            Path(filename),
+            Path.home() / "Downloads" / filename,
+            Path.home() / "Desktop" / filename,
+            Path(".") / filename,
+        ]
+        
+        for location in search_locations:
+            if location.exists() and location.suffix.lower() == '.pdf':
+                return location
+        
+        return None
     
-    def _format_field_summary(self, fields: List[FormField], filename: str) -> str:
-        """Format field extraction summary."""
-        # Count field types
-        field_type_counts = {}
-        for field in fields:
-            field_type = field.field_type.value
-            field_type_counts[field_type] = field_type_counts.get(field_type, 0) + 1
+    def _create_bem_analysis_prompt(self, form_fields: List, filename: str, custom_context: Optional[str]) -> str:
+        """Create comprehensive BEM analysis prompt with embedded field data."""
         
-        # Get top field types
-        top_types = sorted(
-            field_type_counts.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:5]
+        # Create field summary for the prompt
+        field_summary = []
+        for i, field in enumerate(form_fields[:50], 1):  # Limit to 50 for prompt size
+            field_summary.append(f"{i}. **{field.name}** (Type: {field.field_type.value})")
         
-        # Sample field names
-        sample_fields = fields[:10]
+        if len(form_fields) > 50:
+            field_summary.append(f"... and {len(form_fields) - 50} more fields")
         
-        summary = f"""## 📋 PDF Field Extraction Complete
-
-**Form:** {filename}
-**Total Fields:** {len(fields)}
-
-### 📊 Field Type Distribution
-{chr(10).join(f"- **{field_type}:** {count} fields" for field_type, count in top_types)}
-
-### 📝 Sample Field Names
-{chr(10).join(f"- `{field.name}` ({field.field_type.value})" for field in sample_fields)}
-
----
-**Next Steps:**
-1. Review the field data in the JSON below
-2. Generate BEM names for these fields
-3. Use the `modify_form_fields` tool to apply your generated names
-"""
+        field_list = "\n".join(field_summary)
+        context_info = custom_context or "PDF form"
         
-        return summary
-    
-    def _format_modification_summary(self, result: FieldModificationResult) -> str:
-        """Format field modification summary."""
-        if result.success:
-            summary = f"""## ✅ PDF Field Modification Complete
+        prompt = f"""# 🚀 BEM Field Name Generation for {filename}
 
-**Original:** {result.original_pdf_path}
-**Modified:** {result.modified_pdf_path}
-**Fields Modified:** {len(result.modifications)}
-**Timestamp:** {result.timestamp}
+I've analyzed this PDF form and found **{len(form_fields)} form fields**. Please generate comprehensive BEM-style field names for ALL fields using financial services conventions.
 
-### 📝 Field Changes Summary
-{chr(10).join(f"- `{mod['old']}` → `{mod['new']}` ({mod['type']})" for mod in result.modifications[:10])}
+**Context**: {context_info}
 
-{f"...and {len(result.modifications) - 10} more fields" if len(result.modifications) > 10 else ""}
+## 📋 Discovered Form Fields
 
-### 🎯 Validation Results
-- **Fields Before:** {result.field_count_before}
-- **Fields After:** {result.field_count_after}
-- **Errors:** {len(result.errors)}
-- **Warnings:** {len(result.warnings)}
+{field_list}
 
-{f"### ⚠️ Warnings{chr(10)}{chr(10).join(f'- {warning}' for warning in result.warnings)}" if result.warnings else ""}
+## 🚨 CRITICAL REQUIREMENTS
 
----
-**✅ Your PDF is ready for download or further processing!**
-"""
-        else:
-            summary = f"""## ❌ PDF Field Modification Failed
+### ✅ COMPLETE FIELD MAPPING
+**YOU MUST include EVERY SINGLE form field listed above. No exceptions.**
+- ❌ **DO NOT omit any fields**, even if they seem redundant
+- ❌ **DO NOT take shortcuts** or provide "sample" mappings  
+- ❌ **DO NOT skip fields** because they're unclear
+- ✅ **INCLUDE ALL {len(form_fields)} FIELDS** in your final JSON
 
-**File:** {result.original_pdf_path}
-**Timestamp:** {result.timestamp}
+### 🏷️ BEM Format Rules
+- **Structure**: `block_element` or `block_element__modifier`
+- **Separators**: Use `_` between block and element, `__` before modifiers
+- **Case**: Lowercase only, use hyphens for multi-word phrases
+- **Radio Groups**: Use `--group` suffix for containers, `__option` for individual buttons
 
-### 🚨 Errors
-{chr(10).join(f"- {error}" for error in result.errors)}
+### 📊 Financial Services Blocks
+Use these common blocks for financial forms:
+- `owner-information` - Policy/account owner details
+- `insured-information` - Person being insured
+- `beneficiary` - Beneficiary information  
+- `address-information` - Mailing/residential addresses
+- `payment-information` - Banking/payment details
+- `dividend-option` - Dividend selections
+- `withdrawal-option` - Withdrawal preferences
+- `contact-information` - Phone/email details
+- `signatures` - Signature and date fields
+- `policy-details` - Policy-specific information
 
-{f"### ⚠️ Warnings{chr(10)}{chr(10).join(f'- {warning}' for warning in result.warnings)}" if result.warnings else ""}
+### 🔍 Radio Button Detection
+Look for fields with similar names that represent choices:
+- Same base name with numbers: `option_1`, `option_2`, `option_3`
+- Similar patterns: `payment_ach`, `payment_check`, `payment_wire`
+- Create BOTH the group (`payment-method--group`) AND individual options (`payment-method__ach`)
 
----
-**Please review the errors above and try again.**
-"""
-        
-        return summary
-    
+## 📤 REQUIRED OUTPUT FORMAT
+
+You MUST provide your response in this exact format:
+
+### Field Discovery Summary
+**Total fields analyzed: {len(form_fields)}**
+**BEM mappings created: [YOUR_COUNT]**
+
+### Complete BEM Mapping (JSON)
+```json
+{{
+  "source_filename": "{filename}",
+  "analysis_timestamp": "[CURRENT_TIMESTAMP]",
+  "total_fields": {len(form_fields)},
+  "form_context": "{context_info}",
+  "bem_mappings": {{
+    "original_field_name_1": "bem_field_name_1",
+    "original_field_name_2": "bem_field_name_2"
+  }}
+}}
+```
+
+### Validation Checklist
+- [ ] All {len(form_fields)} fields included
+- [ ] BEM format compliance checked
+- [ ] Radio groups properly identified
+- [ ] Financial services conventions applied
+- [ ] JSON format validated
+
+## 🎯 Examples of Good BEM Names
+
+**Basic Fields:**
+- `firstName` → `owner-information_first-name`
+- `policyNumber` → `policy-details_policy-number` 
+- `emailAddress` → `contact-information_email-address`
+
+**Radio Groups:**
+- `dividendOption1` → `dividend-option__accumulate-interest`
+- `dividendOption2` → `dividend-option__reduce-premium`
+- (Plus `dividend-option--group` for the container)
+
+**Signatures:**
+- `ownerSignature` → `signatures_owner-signature`
+- `ownerSignatureDate` → `signatures_owner-date`
+
+## 🚀 START ANALYSIS
+
+Please analyze ALL {len(form_fields)} fields above and provide the complete BEM mapping in the required JSON format. Remember: **EVERY field must be included - no exceptions!**"""
+
+        return prompt
     
     async def run(self) -> None:
         """Run the MCP server."""
         setup_logging(level=logging.INFO)
-        logger.info("Starting PDF Enrichment MCP Server...")
+        logger.info("Starting PDF BEM Naming MCP Server (v0.2.0)...")
         
         try:
             async with stdio_server() as (read_stream, write_stream):
@@ -412,7 +344,7 @@ class PDFEnrichmentServer:
                     write_stream,
                     InitializationOptions(
                         server_name="pdf-enrichment",
-                        server_version="0.1.0",
+                        server_version="0.2.0",
                         capabilities=ServerCapabilities(
                             tools={},
                             resources={},

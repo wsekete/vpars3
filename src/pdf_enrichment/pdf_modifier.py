@@ -97,38 +97,82 @@ class PDFModifier:
             # Load PDF with PyPDFForm
             try:
                 pdf = PdfWrapper(str(pdf_path))
+                logger.info(f"Successfully loaded PDF: {pdf_path}")
             except Exception as e:
+                logger.error(f"Failed to load PDF {pdf_path}: {str(e)}")
                 raise RuntimeError(f"Failed to load PDF: {str(e)}") from e
             
-            # Get initial field count
+            # Get initial field count and analyze form structure
             field_count_before = len(pdf.widgets)
+            logger.info(f"PDF has {field_count_before} form fields")
+            
+            # Log actual field names for debugging
+            actual_field_names = list(pdf.widgets.keys())
+            logger.info(f"Actual PDF field names: {actual_field_names[:10]}{'...' if len(actual_field_names) > 10 else ''}")
+            
+            # Log PyPDFForm method availability
+            logger.info(f"PyPDFForm methods available: update_widget_key={hasattr(pdf, 'update_widget_key')}, "
+                       f"commit_widget_key_updates={hasattr(pdf, 'commit_widget_key_updates')}")
+            
+            # Log field mappings to be applied
+            logger.info(f"Attempting to apply {len(field_mappings)} field mappings")
+            for original, bem_name in list(field_mappings.items())[:5]:
+                logger.debug(f"  Mapping: '{original}' → '{bem_name}'")
+            if len(field_mappings) > 5:
+                logger.debug(f"  ... and {len(field_mappings) - 5} more mappings")
             
             # Validate field mappings
             if validate_mappings:
+                logger.info("Validating field mappings...")
                 validation_errors = self._validate_field_mappings(pdf, field_mappings)
                 if validation_errors:
+                    logger.error(f"Field mapping validation failed: {validation_errors}")
                     raise ValueError(f"Invalid field mappings: {'; '.join(validation_errors)}")
+                else:
+                    logger.info("Field mapping validation passed")
             
             # Perform field modifications
+            logger.info("Starting field modification process...")
             modifications, errors, warnings = await self._apply_field_modifications(
                 pdf, field_mappings
             )
             
+            logger.info(f"Field modification completed: {len(modifications)} successful, {len(errors)} errors, {len(warnings)} warnings")
+            if errors:
+                logger.error(f"Modification errors: {errors}")
+            if warnings:
+                logger.warning(f"Modification warnings: {warnings}")
+            
             # Save modified PDF
-            if preserve_original:
-                # Copy original to output path first
-                shutil.copy2(pdf_path, output_path)
-                # Create new PDF wrapper for the copy
-                pdf_copy = PdfWrapper(str(output_path))
-                # Apply modifications to the copy
-                _, _, _ = await self._apply_field_modifications(pdf_copy, field_mappings)
-                pdf_copy.write(str(output_path))
-            else:
-                # Write directly to output path
-                pdf.write(str(output_path))
+            logger.info(f"Saving modified PDF to: {output_path}")
+            try:
+                if preserve_original:
+                    logger.debug("Preserving original, creating copy for modification")
+                    # Copy original to output path first
+                    shutil.copy2(pdf_path, output_path)
+                    # Create new PDF wrapper for the copy
+                    pdf_copy = PdfWrapper(str(output_path))
+                    # Apply modifications to the copy
+                    _, _, _ = await self._apply_field_modifications(pdf_copy, field_mappings)
+                    pdf_copy.write(str(output_path))
+                else:
+                    logger.debug("Modifying original PDF directly")
+                    # Write directly to output path
+                    pdf.write(str(output_path))
+                
+                logger.info(f"Successfully saved modified PDF: {output_path}")
+            except Exception as e:
+                logger.error(f"Failed to save modified PDF: {str(e)}")
+                raise RuntimeError(f"Failed to save modified PDF: {str(e)}") from e
             
             # Verify modifications
-            field_count_after = len(PdfWrapper(str(output_path)).widgets)
+            try:
+                verification_pdf = PdfWrapper(str(output_path))
+                field_count_after = len(verification_pdf.widgets)
+                logger.info(f"Verification: Modified PDF has {field_count_after} fields")
+            except Exception as e:
+                logger.error(f"Failed to verify modified PDF: {str(e)}")
+                field_count_after = 0
             
             # Create result
             result = FieldModificationResult(
@@ -211,16 +255,29 @@ class PDFModifier:
         
         # Get existing field names
         existing_fields = set(pdf.widgets.keys())
+        logger.info(f"PDF contains {len(existing_fields)} fields: {sorted(list(existing_fields))[:10]}{'...' if len(existing_fields) > 10 else ''}")
         
         # Check for missing source fields
+        missing_fields = []
         for original_name in field_mappings:
             if original_name not in existing_fields:
+                missing_fields.append(original_name)
                 errors.append(f"Source field '{original_name}' not found in PDF")
+        
+        if missing_fields:
+            logger.error(f"Missing source fields: {missing_fields[:5]}{'...' if len(missing_fields) > 5 else ''}")
+            
+            # Try to find similar field names
+            for missing_field in missing_fields[:5]:
+                similar_fields = [field for field in existing_fields if missing_field.lower() in field.lower() or field.lower() in missing_field.lower()]
+                if similar_fields:
+                    logger.info(f"Possible matches for '{missing_field}': {similar_fields[:3]}")
         
         # Check for duplicate target names
         target_names = list(field_mappings.values())
         duplicates = set(name for name in target_names if target_names.count(name) > 1)
         if duplicates:
+            logger.error(f"Duplicate target names found: {duplicates}")
             errors.append(f"Duplicate target names: {', '.join(duplicates)}")
         
         # Check for invalid BEM names
@@ -230,7 +287,12 @@ class PDFModifier:
                 invalid_names.append(f"'{original_name}' -> '{bem_name}'")
         
         if invalid_names:
+            logger.error(f"Invalid BEM names: {invalid_names[:3]}{'...' if len(invalid_names) > 3 else ''}")
             errors.append(f"Invalid BEM names: {'; '.join(invalid_names)}")
+        
+        # Log validation summary
+        valid_mappings = len(field_mappings) - len(missing_fields)
+        logger.info(f"Field validation summary: {valid_mappings}/{len(field_mappings)} mappings are valid")
         
         return errors
     
@@ -238,9 +300,27 @@ class PDFModifier:
         """Check if a name follows BEM conventions."""
         import re
         
-        # Basic BEM pattern: block_element or block_element__modifier or block_element--group
+        # Enhanced BEM pattern supporting:
+        # - Basic: block_element
+        # - With modifier: block_element__modifier
+        # - Radio group container: block_element--group
+        # - Multiple modifiers: block_element__modifier-name
+        # - Hyphens in names: block-name_element-name__modifier-name
         bem_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*(?:__[a-z][a-z0-9-]*|--group)?$'
-        return re.match(bem_pattern, name) is not None
+        
+        # Additional check for valid radio group patterns
+        if '--group' in name:
+            # Radio group container: should end with --group
+            group_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*--group$'
+            return re.match(group_pattern, name) is not None
+        elif '__' in name:
+            # Radio option or modifier: should have proper structure
+            modifier_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*__[a-z][a-z0-9-]*$'
+            return re.match(modifier_pattern, name) is not None
+        else:
+            # Basic block_element pattern
+            basic_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*$'
+            return re.match(basic_pattern, name) is not None
     
     async def _apply_field_modifications(
         self, pdf: PdfWrapper, field_mappings: Dict[str, str]
@@ -251,28 +331,49 @@ class PDFModifier:
         warnings = []
         
         # Process each field mapping
+        total_mappings = len(field_mappings)
+        processed_count = 0
+        
         for original_name, bem_name in field_mappings.items():
+            processed_count += 1
+            logger.debug(f"Processing field {processed_count}/{total_mappings}: '{original_name}' → '{bem_name}'")
+            
             try:
                 # Check if field exists
                 if original_name not in pdf.widgets:
-                    errors.append(f"Field '{original_name}' not found")
+                    error_msg = f"Field '{original_name}' not found in PDF"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
                     continue
                 
                 # Get the widget
                 widget = pdf.widgets[original_name]
+                logger.debug(f"Found widget for '{original_name}': {type(widget).__name__}")
                 
                 # Store original properties
                 original_properties = self._extract_widget_properties(widget)
+                logger.debug(f"Extracted {len(original_properties)} properties from '{original_name}'")
                 
                 # Determine field type
                 field_type = self._get_field_type_from_widget(widget)
+                logger.debug(f"Field type for '{original_name}': {field_type.value}")
+                
+                # Check if update_widget_key method exists
+                if not hasattr(pdf, 'update_widget_key'):
+                    error_msg = f"PyPDFForm method 'update_widget_key' not available"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                    break
                 
                 # Update field key using PyPDFForm's method
                 try:
+                    logger.debug(f"Calling pdf.update_widget_key('{original_name}', '{bem_name}')")
                     pdf.update_widget_key(original_name, bem_name)
                     
                     # Verify the change was applied
                     if bem_name in pdf.widgets:
+                        logger.debug(f"Successfully renamed field: '{original_name}' → '{bem_name}'")
+                        
                         # Restore properties to the renamed widget
                         new_widget = pdf.widgets[bem_name]
                         self._restore_widget_properties(new_widget, original_properties)
@@ -286,30 +387,57 @@ class PDFModifier:
                             "preserved_properties": len(original_properties),
                         })
                         
-                        logger.debug(f"Successfully renamed '{original_name}' to '{bem_name}'")
+                        logger.info(f"✅ Successfully renamed '{original_name}' to '{bem_name}'")
                     else:
-                        errors.append(f"Failed to rename '{original_name}' to '{bem_name}': field not found after rename")
+                        error_msg = f"Failed to rename '{original_name}' to '{bem_name}': field not found after rename"
+                        logger.error(error_msg)
+                        errors.append(error_msg)
                 
-                except (AttributeError, ValueError) as e:
-                    errors.append(f"Failed to rename '{original_name}' to '{bem_name}': {str(e)}")
+                except AttributeError as e:
+                    error_msg = f"PyPDFForm method error for '{original_name}' → '{bem_name}': {str(e)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                except ValueError as e:
+                    error_msg = f"Invalid value for '{original_name}' → '{bem_name}': {str(e)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
                 except Exception as e:
-                    errors.append(f"Unexpected error renaming '{original_name}' to '{bem_name}': {str(e)}")
+                    error_msg = f"Unexpected error renaming '{original_name}' to '{bem_name}': {str(e)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
                     logger.exception(f"Unexpected error during field rename: {original_name} -> {bem_name}")
                     
             except (AttributeError, ValueError, TypeError) as e:
-                errors.append(f"Error processing field '{original_name}': {str(e)}")
+                error_msg = f"Error processing field '{original_name}': {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
             except Exception as e:
-                errors.append(f"Unexpected error processing field '{original_name}': {str(e)}")
+                error_msg = f"Unexpected error processing field '{original_name}': {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
                 logger.exception(f"Unexpected error processing field: {original_name}")
         
+        logger.info(f"Field processing complete: {len(modifications)} successful, {len(errors)} failed")
+        
         # Commit all widget key updates
-        try:
-            pdf.commit_widget_key_updates()
-        except (AttributeError, ValueError) as e:
-            warnings.append(f"Warning during commit: {str(e)}")
-        except Exception as e:
-            warnings.append(f"Unexpected error during commit: {str(e)}")
-            logger.exception("Unexpected error during widget key updates commit")
+        if hasattr(pdf, 'commit_widget_key_updates'):
+            try:
+                logger.info("Committing widget key updates...")
+                pdf.commit_widget_key_updates()
+                logger.info("Widget key updates committed successfully")
+            except (AttributeError, ValueError) as e:
+                warning_msg = f"Warning during commit: {str(e)}"
+                logger.warning(warning_msg)
+                warnings.append(warning_msg)
+            except Exception as e:
+                warning_msg = f"Unexpected error during commit: {str(e)}"
+                logger.error(warning_msg)
+                warnings.append(warning_msg)
+                logger.exception("Unexpected error during widget key updates commit")
+        else:
+            warning_msg = "PyPDFForm method 'commit_widget_key_updates' not available"
+            logger.warning(warning_msg)
+            warnings.append(warning_msg)
         
         return modifications, errors, warnings
     
