@@ -1,16 +1,19 @@
 # PDF Field BEM Renamer
 
-🚀 **Simple 2-step workflow to rename PDF form fields with intelligent BEM-style naming**
+🚀 **Enhanced PDF form field renaming with intelligent BEM-style naming**
 
-Transform PDF forms by analyzing field names and generating consistent BEM-style field names using financial services conventions.
+Transform PDF forms by analyzing field names and generating consistent BEM-style field names using financial services conventions. **Version 0.2.0** includes major improvements to BEM validation, field type support, and signature field handling.
 
 ## ✨ Key Features
 
 - **🧠 AI-Powered Analysis** - Claude Desktop analyzes PDF forms and generates BEM names
 - **📄 JSON Export** - Clean JSON output with all field mappings
 - **🔧 Standalone Modifier** - External tool applies changes using PyPDFForm
-- **🏷️ BEM Convention** - Consistent `block_element__modifier` style names
+- **🏷️ Enhanced BEM Convention** - Flexible `block_element__modifier` style names with full hierarchy support
 - **💾 Auto-Save** - Modified PDFs saved with `__parsed.pdf` suffix
+- **🖊️ Signature Field Support** - Proper handling of signature fields and date fields
+- **📊 Field Type Detection** - Support for text, checkbox, radio, dropdown, signature, and date fields
+- **🔘 Radio Group Enhancement** - Improved radio button group detection and mapping
 
 ## 🚀 Quick Start
 
@@ -78,13 +81,21 @@ python scripts/pdf_bem_modifier.py --pdf ~/Desktop/your-form.pdf --json mappings
 - Saves modified PDF with `__parsed.pdf` suffix in same directory
 - Provides detailed progress and error reporting
 
-## 🎯 BEM Naming Convention
+## 🎯 Enhanced BEM Naming Convention
 
-### Format
+### Flexible Hierarchy Support
 - **Block**: Form sections (`owner-information`, `beneficiary`, `payment`)
 - **Element**: Individual fields (`first-name`, `amount`, `signature`)
 - **Modifier**: Field variations (`__monthly`, `__gross`, `__primary`)
 - **Special**: Radio groups (`--group`)
+
+### Supported BEM Patterns
+- `block` (e.g., `dividend-option`)
+- `block_element` (e.g., `dividend-option_cash`)
+- `block__modifier` (e.g., `dividend-option__cash`)
+- `block_element__modifier` (e.g., `name-change_reason__marriage`)
+- `block--group` (e.g., `dividend-option--group`)
+- `block_element--group` (e.g., `payment-method_options--group`)
 
 ### Examples
 ```
@@ -94,7 +105,18 @@ beneficiary_withdrawal-frequency__monthly
 payment-method--group
 payment-method__ach
 signatures_owner-signature
+name-change_reason__marriage
+dividend-option__accumulate-interest
 ```
+
+### Field Type Support
+- **Text Fields**: `owner-information_first-name` (field_type: "text")
+- **Checkboxes**: `insured-information_same-as-owner__checkbox` (field_type: "checkbox")
+- **Radio Buttons**: `dividend-option__cash` (field_type: "radio")
+- **Radio Groups**: `dividend-option--group` (field_type: "radio_group")
+- **Signature Fields**: `signatures_owner-signature` (field_type: "signature")
+- **Date Fields**: `signatures_owner-date` (field_type: "date")
+- **Dropdown Fields**: `billing-frequency__annual` (field_type: "dropdown")
 
 ## 📋 Sample JSON Output
 
@@ -162,7 +184,7 @@ python scripts/pdf_bem_modifier.py --pdf examples/sample_form.pdf --json example
 **Claude Desktop not finding tool:**
 ```bash
 # Verify MCP server
-python -m pdf_enrichment.mcp_server
+python -m pdf_enrichment.mcp_server_v2
 
 # Check config path
 cat ~/Library/Application\ Support/Claude/claude_desktop_config.json
@@ -181,6 +203,34 @@ python -c "import PyPDFForm; print('OK')"
 - Check that input PDF path is correct
 - Ensure you have write permissions to the directory
 - Verify JSON mappings file exists and is valid
+
+**BEM validation errors:**
+```bash
+# Test BEM name validation
+python -c "
+from src.pdf_enrichment.pdf_modifier import PDFModifier
+modifier = PDFModifier()
+print(modifier._is_valid_bem_name('owner-information_first-name'))  # Should be True
+"
+```
+
+**Field detection issues:**
+- Ensure PDF has fillable form fields (not just scanned image)
+- Check for proper field names in the PDF
+- Verify field types are correctly identified
+
+### Known Limitations
+
+- **Manual field mapping**: Automatic field detection needs improvement
+- **Radio group detection**: May require manual verification
+- **JSON format**: Occasional formatting issues with complex mappings
+- **Field type validation**: Some boolean property validation errors
+
+### Performance Notes
+
+- **Large PDFs**: Processing time increases with form complexity
+- **Memory usage**: Complex forms with many fields may use more memory
+- **Validation time**: BEM name validation is fast but field detection can be slow
 
 ## 📄 License
 

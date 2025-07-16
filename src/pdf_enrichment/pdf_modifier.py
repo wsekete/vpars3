@@ -300,27 +300,23 @@ class PDFModifier:
         """Check if a name follows BEM conventions."""
         import re
         
-        # Enhanced BEM pattern supporting:
-        # - Basic: block_element
-        # - With modifier: block_element__modifier
-        # - Radio group container: block_element--group
-        # - Multiple modifiers: block_element__modifier-name
-        # - Hyphens in names: block-name_element-name__modifier-name
-        bem_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*(?:__[a-z][a-z0-9-]*|--group)?$'
+        # Flexible BEM pattern supporting full hierarchy:
+        # - block (e.g., dividend-option)
+        # - block_element (e.g., dividend-option_cash)
+        # - block__modifier (e.g., dividend-option__cash)
+        # - block_element__modifier (e.g., name-change_reason__marriage)
+        # - block--group (e.g., dividend-option--group)
+        # - block_element--group (e.g., payment-method_options--group)
+        # 
+        # Pattern breakdown:
+        # - ^[a-z][a-z0-9-]*           : block (starts with letter, allows hyphens)
+        # - (?:_[a-z][a-z0-9-]*)?      : optional element (underscore + name)
+        # - (?:__[a-z][a-z0-9-]*|--group)? : optional modifier OR group suffix
+        # - $                          : end of string
         
-        # Additional check for valid radio group patterns
-        if '--group' in name:
-            # Radio group container: should end with --group
-            group_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*--group$'
-            return re.match(group_pattern, name) is not None
-        elif '__' in name:
-            # Radio option or modifier: should have proper structure
-            modifier_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*__[a-z][a-z0-9-]*$'
-            return re.match(modifier_pattern, name) is not None
-        else:
-            # Basic block_element pattern
-            basic_pattern = r'^[a-z][a-z0-9-]*_[a-z][a-z0-9-]*$'
-            return re.match(basic_pattern, name) is not None
+        bem_pattern = r'^[a-z][a-z0-9-]*(?:_[a-z][a-z0-9-]*)?(?:__[a-z][a-z0-9-]*|--group)?$'
+        
+        return re.match(bem_pattern, name) is not None
     
     async def _apply_field_modifications(
         self, pdf: PdfWrapper, field_mappings: Dict[str, str]
