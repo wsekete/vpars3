@@ -72,9 +72,10 @@ For PDF modification capabilities, see the **Archived Modification Engine** fold
 - Includes validation and field count verification
 - Provides downloadable JSON artifact for external use
 
-### Additional Tools: `validate_bem_json` and `modify_form_fields`
+### Additional Tools: `validate_bem_json`, `modify_form_fields`, and `generate_unified_fields`
 - **validate_bem_json**: Validates and cleans BEM mapping JSON
 - **modify_form_fields**: Provides guidance for manual PDF modification
+- **generate_unified_fields**: Generates enriched Unified Field definitions from BEM mappings for application integration
 
 ### Archived Modification Engine
 Advanced PDF modification tools are preserved in the `Archived Modification Engine` folder for future development.
@@ -136,15 +137,59 @@ dividend-option__accumulate-interest
 }
 ```
 
+## 🧩 Unified Fields Generation
+
+The `generate_unified_fields` tool transforms BEM mappings into enriched Unified Field (UF) definitions for application integration across insurance and annuity forms.
+
+### Input Format
+```json
+{
+  "bem_mappings": {
+    "owner_first_name": "owner-information_first-name",
+    "dividend_option__cash": "dividend-option__cash",
+    "payment_method--group": "payment-method--group"
+  }
+}
+```
+
+### Output Format
+```json
+[
+  {
+    "api_name": "owner_first_name",
+    "name": "Owner: First Name",
+    "description": "First name of the policy owner",
+    "type": "text field",
+    "label": "First Name"
+  },
+  {
+    "api_name": "dividend_option__cash",
+    "name": "Dividend Option: Cash",
+    "description": "Option to receive dividends as cash payment",
+    "type": "radio button",
+    "label": "Cash"
+  }
+]
+```
+
+### Field Types Supported
+- **text field**: Standard input fields
+- **radio button**: Individual radio button options
+- **radio group**: Radio button group containers
+- **checkbox**: Boolean/toggle options
+- **group**: Section containers
+- **slider**: Range or percentage inputs
+
 ## 🔧 Usage
 
 This tool is designed to work through Claude Desktop. For command line usage and PDF modification capabilities, see the **Archived Modification Engine** folder which contains standalone scripts and advanced features.
 
 ### Basic Workflow
 1. Upload PDF to Claude Desktop
-2. Use `generate_BEM_names` tool
-3. Download the generated JSON mapping
-4. Use external tools for PDF modification (see archived folder)
+2. Use `generate_BEM_names` tool to create BEM mappings
+3. Use `generate_unified_fields` tool to create enriched field definitions
+4. Download the generated JSON artifacts
+5. Use external tools for PDF modification (see archived folder)
 
 ## 📊 Project Structure
 

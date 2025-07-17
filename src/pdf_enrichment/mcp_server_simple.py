@@ -58,6 +58,13 @@ class ModifyFormFieldsInput(BaseModel):
     )
 
 
+class GenerateUnifiedFieldsInput(BaseModel):
+    """Input for generate_unified_fields tool."""
+    bem_mappings: Dict[str, str] = Field(
+        description="BEM mappings with API names as keys and BEM-style AcroField names as values"
+    )
+
+
 class SimplePDFEnrichmentServer:
     """Simplified MCP Server for PDF Form Field Enrichment."""
     
@@ -89,6 +96,11 @@ class SimplePDFEnrichmentServer:
                     description="🔧 Apply BEM field mappings to uploaded PDF (requires actual PDF file)",
                     inputSchema=ModifyFormFieldsInput.model_json_schema(),
                 ),
+                Tool(
+                    name="generate_unified_fields",
+                    description="🧩 Generate enriched Unified Field definitions from BEM mappings for application integration",
+                    inputSchema=GenerateUnifiedFieldsInput.model_json_schema(),
+                ),
             ]
         
         @self.server.list_prompts()
@@ -110,6 +122,8 @@ class SimplePDFEnrichmentServer:
                 return await self._validate_bem_json(ValidateBEMJSONInput(**arguments))
             elif name == "modify_form_fields":
                 return await self._modify_form_fields(ModifyFormFieldsInput(**arguments))
+            elif name == "generate_unified_fields":
+                return await self._generate_unified_fields(GenerateUnifiedFieldsInput(**arguments))
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
@@ -422,6 +436,133 @@ If you need automated PDF modification, you'll need to:
                 lines.append(f"... and {len(mappings) - 10} more mappings")
                 break
         return "\n".join(lines)
+    
+    async def _generate_unified_fields(self, input_data: GenerateUnifiedFieldsInput):
+        """Generate enriched Unified Field definitions from BEM mappings."""
+        logger.info("Generating unified fields from BEM mappings")
+        
+        # Create the MCP-compliant prompt for unified fields generation
+        unified_fields_prompt = f"""# 🧩 Unified Fields Generation from BEM Mappings
+
+You are operating under **Model Context Protocol (MCP)** to generate enriched Unified Field (UF) definitions from BEM-formatted PDF field mappings.
+
+## 📥 Input Data
+You have **{len(input_data.bem_mappings)}** BEM field mappings to process:
+
+```json
+{json.dumps(input_data.bem_mappings, indent=2)}
+```
+
+## 🎯 Your Task
+Generate enriched Unified Field definitions that normalize these PDF form fields for application integration across hundreds of annuity and insurance forms.
+
+## 📤 Required Output Format
+Return a JSON array with enriched Unified Field objects. For each input mapping, create:
+
+```json
+{{
+  "api_name": "snake_case_api_name",
+  "name": "Human-readable UI Label",
+  "description": "Brief description of what this field captures",
+  "type": "text field | radio button | radio group | checkbox | group | slider",
+  "label": "Exact UI-facing label text as shown on the form"
+}}
+```
+
+## 🧠 Processing Rules
+
+### 1. **API Name** (use as-is)
+- Keep the key from input mappings exactly as provided
+- Should already be in snake_case format
+
+### 2. **Name** (humanize from API name)
+- Convert snake_case to readable format with proper capitalization
+- Use colons to separate logical groups and fields
+- Examples:
+  - `owner_first_name` → `"Owner: First Name"`
+  - `status_income__spouse_retirement` → `"Household Income: Spouse / Partner's Retirement"`
+  - `payment_method__ach` → `"Payment Method: ACH"`
+
+### 3. **Description** (brief but informative)
+- Provide context about what the field captures
+- Use insurance/annuity domain knowledge
+- Examples:
+  - `"First name of the policy owner"`
+  - `"Retirement income from spouse or partner used to fund this annuity"`
+  - `"Electronic bank transfer payment method"`
+
+### 4. **Type** (infer from BEM patterns)
+- Use these rules to determine field type:
+  - **Radio Group**: Ends with `--group` → `"radio group"`
+  - **Radio Button**: Contains `__` with option values → `"radio button"`
+  - **Text Field**: Standard fields with `_amount`, `_value`, `_city`, `_name` → `"text field"`
+  - **Checkbox**: Boolean-style options, standalone yes/no → `"checkbox"`
+  - **Group**: Section containers ending in `--custom` → `"group"`
+  - **Slider**: Range or percentage fields → `"slider"`
+
+### 5. **Label** (extract from BEM value)
+- Use the BEM-style value from input (clean up formatting)
+- Remove BEM syntax but preserve semantic meaning
+- Examples:
+  - `"owner-information_first-name"` → `"First Name"`
+  - `"dividend-option__accumulate-interest"` → `"Accumulate Interest"`
+
+## 🎯 Examples
+
+### Input:
+```json
+{{
+  "owner_first_name": "owner-information_first-name",
+  "dividend_option__cash": "dividend-option__cash",
+  "payment_method--group": "payment-method--group"
+}}
+```
+
+### Expected Output:
+```json
+[
+  {{
+    "api_name": "owner_first_name",
+    "name": "Owner: First Name",
+    "description": "First name of the policy owner",
+    "type": "text field",
+    "label": "First Name"
+  }},
+  {{
+    "api_name": "dividend_option__cash",
+    "name": "Dividend Option: Cash",
+    "description": "Option to receive dividends as cash payment",
+    "type": "radio button",
+    "label": "Cash"
+  }},
+  {{
+    "api_name": "payment_method--group",
+    "name": "Payment Method",
+    "description": "Group of payment method options",
+    "type": "radio group",
+    "label": "Payment Method"
+  }}
+]
+```
+
+## 📋 Quality Requirements
+
+- **Consistency**: Use consistent formatting and terminology
+- **Accuracy**: Don't hallucinate field structure beyond given context
+- **Completeness**: Process ALL {len(input_data.bem_mappings)} input mappings
+- **Domain Knowledge**: Apply insurance/annuity field conventions
+- **JSON Format**: Return valid JSON array only
+
+## 🚀 Generate Results
+
+Please process the {len(input_data.bem_mappings)} BEM mappings above and return the enriched Unified Field definitions as a JSON array. Focus on creating clear, consistent field definitions that will work across multiple insurance and annuity forms."""
+
+        return [
+            TextContent(
+                type="text",
+                text=unified_fields_prompt
+            )
+        ]
     
     async def run(self) -> None:
         """Run the MCP server."""
