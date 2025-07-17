@@ -40,24 +40,6 @@ class GenerateBEMNamesInput(BaseModel):
     )
 
 
-class ValidateBEMJSONInput(BaseModel):
-    """Input for validate_bem_json tool."""
-    json_content: str = Field(
-        description="JSON content to validate (BEM mapping JSON from generate_BEM_names)"
-    )
-
-
-class ModifyFormFieldsInput(BaseModel):
-    """Input for modify_form_fields tool."""
-    field_mappings: Dict[str, str] = Field(
-        description="Mapping of original field names to new BEM names (from generate_BEM_names output)"
-    )
-    output_filename: Optional[str] = Field(
-        None,
-        description="Output filename (defaults to 'BEM_renamed.pdf')"
-    )
-
-
 class GenerateUnifiedFieldsInput(BaseModel):
     """Input for generate_unified_fields tool."""
     bem_mappings: Dict[str, str] = Field(
@@ -87,16 +69,6 @@ class SimplePDFEnrichmentServer:
                     inputSchema=GenerateBEMNamesInput.model_json_schema(),
                 ),
                 Tool(
-                    name="validate_bem_json",
-                    description="✅ Validate and clean BEM mapping JSON before applying to PDF",
-                    inputSchema=ValidateBEMJSONInput.model_json_schema(),
-                ),
-                Tool(
-                    name="modify_form_fields",
-                    description="🔧 Apply BEM field mappings to uploaded PDF (requires actual PDF file)",
-                    inputSchema=ModifyFormFieldsInput.model_json_schema(),
-                ),
-                Tool(
                     name="generate_unified_fields",
                     description="🧩 Generate enriched Unified Field definitions from BEM mappings for application integration",
                     inputSchema=GenerateUnifiedFieldsInput.model_json_schema(),
@@ -118,10 +90,6 @@ class SimplePDFEnrichmentServer:
             """Handle tool calls."""
             if name == "generate_BEM_names":
                 return await self._generate_bem_names(GenerateBEMNamesInput(**arguments))
-            elif name == "validate_bem_json":
-                return await self._validate_bem_json(ValidateBEMJSONInput(**arguments))
-            elif name == "modify_form_fields":
-                return await self._modify_form_fields(ModifyFormFieldsInput(**arguments))
             elif name == "generate_unified_fields":
                 return await self._generate_unified_fields(GenerateUnifiedFieldsInput(**arguments))
             else:
@@ -357,85 +325,6 @@ Before submitting, verify:
                 text=bem_prompt
             )
         ]
-    
-    async def _validate_bem_json(self, input_data: ValidateBEMJSONInput):
-        """Validate and clean BEM mapping JSON."""
-        logger.info("Validating BEM mapping JSON")
-        
-        # Simple validation prompt for Claude Desktop
-        validation_prompt = f"""# BEM Mapping JSON Validation
-
-Please validate and clean the following BEM mapping JSON:
-
-```json
-{input_data.json_content}
-```
-
-## Validation Requirements:
-1. **JSON Format**: Must be valid JSON
-2. **Required Fields**: Must have `filename`, `total_fields_found`, `bem_mappings`
-3. **BEM Names**: All BEM names must follow proper conventions
-4. **Radio Groups**: Radio group mappings must be consistent
-5. **Field Types**: Field types must be valid (text, checkbox, radio, etc.)
-
-## Your Task:
-1. **Parse and validate** the JSON
-2. **Fix any formatting issues**
-3. **Clean up any corruption**
-4. **Verify BEM naming conventions**
-5. **Return the cleaned JSON**
-
-If there are errors, explain them and provide the corrected version."""
-        
-        return [
-            TextContent(
-                type="text",
-                text=validation_prompt
-            )
-        ]
-    
-    async def _modify_form_fields(self, input_data: ModifyFormFieldsInput):
-        """Modify PDF form fields using BEM mappings."""
-        logger.info("Modifying uploaded PDF with BEM field mappings")
-        
-        # Simple instructions for manual PDF modification
-        modification_prompt = f"""# PDF Field Modification Instructions
-
-You have **{len(input_data.field_mappings)}** BEM field mappings to apply to your PDF.
-
-## 📋 Your Field Mappings:
-{self._format_field_mappings(input_data.field_mappings)}
-
-## 🔧 Manual Application Process:
-1. **Use a PDF editor** (like Adobe Acrobat Pro, PDFtk, or similar tool)
-2. **Apply the field name mappings** shown above
-3. **Preserve all field properties** (type, size, position, etc.)
-4. **Test the modified PDF** to ensure functionality
-
-## 💡 Alternative Approach:
-If you need automated PDF modification, you'll need to:
-1. **Save the PDF locally** to your computer
-2. **Use a PDF processing script** with the mappings above
-3. **Apply the BEM names programmatically**
-
-**Note**: This tool provides the mapping instructions. The actual PDF modification requires external tools or scripts."""
-        
-        return [
-            TextContent(
-                type="text",
-                text=modification_prompt
-            )
-        ]
-    
-    def _format_field_mappings(self, mappings: Dict[str, str]) -> str:
-        """Format field mappings for display."""
-        lines = []
-        for i, (original, bem_name) in enumerate(mappings.items(), 1):
-            lines.append(f"{i}. `{original}` → `{bem_name}`")
-            if i >= 10:  # Limit display to first 10
-                lines.append(f"... and {len(mappings) - 10} more mappings")
-                break
-        return "\n".join(lines)
     
     async def _generate_unified_fields(self, input_data: GenerateUnifiedFieldsInput):
         """Generate enriched Unified Field definitions from BEM mappings."""

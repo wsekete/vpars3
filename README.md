@@ -72,9 +72,7 @@ For PDF modification capabilities, see the **Archived Modification Engine** fold
 - Includes validation and field count verification
 - Provides downloadable JSON artifact for external use
 
-### Additional Tools: `validate_bem_json`, `modify_form_fields`, and `generate_unified_fields`
-- **validate_bem_json**: Validates and cleans BEM mapping JSON
-- **modify_form_fields**: Provides guidance for manual PDF modification
+### Additional Tool: `generate_unified_fields`
 - **generate_unified_fields**: Generates enriched Unified Field definitions from BEM mappings for application integration
 
 ### Archived Modification Engine
@@ -189,7 +187,8 @@ This tool is designed to work through Claude Desktop. For command line usage and
 2. Use `generate_BEM_names` tool to create BEM mappings
 3. Use `generate_unified_fields` tool to create enriched field definitions
 4. Download the generated JSON artifacts
-5. Use external tools for PDF modification (see archived folder)
+
+For PDF modification capabilities, see the **Archived Modification Engine** folder.
 
 ## 📊 Project Structure
 
