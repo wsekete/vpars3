@@ -1,19 +1,18 @@
 # PDF Field BEM Renamer
 
-🚀 **Enhanced PDF form field renaming with intelligent BEM-style naming**
+🚀 **Claude Desktop tool for generating BEM-style field names from PDF forms**
 
-Transform PDF forms by analyzing field names and generating consistent BEM-style field names using financial services conventions. **Version 0.2.0** includes major improvements to BEM validation, field type support, and signature field handling.
+Analyze PDF forms and generate consistent BEM-style field names using financial services conventions. This tool integrates with Claude Desktop to provide AI-powered field analysis and BEM name generation.
 
 ## ✨ Key Features
 
 - **🧠 AI-Powered Analysis** - Claude Desktop analyzes PDF forms and generates BEM names
 - **📄 JSON Export** - Clean JSON output with all field mappings
-- **🔧 Standalone Modifier** - External tool applies changes using PyPDFForm
-- **🏷️ Enhanced BEM Convention** - Flexible `block_element__modifier` style names with full hierarchy support
-- **💾 Auto-Save** - Modified PDFs saved with `__parsed.pdf` suffix
+- **🏷️ BEM Convention** - Flexible `block_element__modifier` style names with full hierarchy support
 - **🖊️ Signature Field Support** - Proper handling of signature fields and date fields
 - **📊 Field Type Detection** - Support for text, checkbox, radio, dropdown, signature, and date fields
 - **🔘 Radio Group Enhancement** - Improved radio button group detection and mapping
+- **🗂️ Archived Modification Engine** - Advanced PDF modification tools preserved in archive folder
 
 ## 🚀 Quick Start
 
@@ -44,42 +43,41 @@ Add to your Claude Desktop configuration:
         "run",
         "python",
         "-m",
-        "pdf_enrichment.mcp_server"
+        "src.pdf_enrichment.mcp_server_simple"
       ],
-      "cwd": "/path/to/pdf-enrichment-platform"
+      "cwd": "/path/to/vpars3"
     }
   }
 }
 ```
 
-### 3. Simple 2-Step Workflow
+### 3. Simple Usage
 
-#### Step 1: Generate BEM Names (in Claude Desktop)
+#### Generate BEM Names (in Claude Desktop)
 1. **Upload your PDF** to Claude Desktop
-2. **Use the tool**: `generate_bem_names_and_export_json`
+2. **Use the tool**: `generate_BEM_names` (optional context parameter)
 3. **Copy the JSON output** from the response
 
-#### Step 2: Modify PDF (external command)
-```bash
-# Run the standalone modifier
-python scripts/pdf_bem_modifier.py --pdf ~/Desktop/your-form.pdf --json mappings.json
+The tool will analyze the PDF and generate a complete BEM mapping with downloadable JSON artifact.
 
-# Result: ~/Desktop/your-form__parsed.pdf
-```
+#### Optional: PDF Modification
+For PDF modification capabilities, see the **Archived Modification Engine** folder which contains advanced tools for applying BEM names to PDF files.
 
 ## 🛠️ Tool Overview
 
-### Claude Desktop Tool: `generate_bem_names_and_export_json`
+### Claude Desktop Tool: `generate_BEM_names`
 - Analyzes uploaded PDF form fields
 - Generates BEM-style names using financial services conventions
 - Outputs comprehensive JSON with all field mappings
 - Includes validation and field count verification
+- Provides downloadable JSON artifact for external use
 
-### Standalone Script: `pdf_bem_modifier.py`
-- Takes original PDF and JSON mappings as input
-- Uses PyPDFForm to rename fields while preserving properties
-- Saves modified PDF with `__parsed.pdf` suffix in same directory
-- Provides detailed progress and error reporting
+### Additional Tools: `validate_bem_json` and `modify_form_fields`
+- **validate_bem_json**: Validates and cleans BEM mapping JSON
+- **modify_form_fields**: Provides guidance for manual PDF modification
+
+### Archived Modification Engine
+Advanced PDF modification tools are preserved in the `Archived Modification Engine` folder for future development.
 
 ## 🎯 Enhanced BEM Naming Convention
 
@@ -138,43 +136,41 @@ dividend-option__accumulate-interest
 }
 ```
 
-## 🔧 Command Line Usage
+## 🔧 Usage
 
-```bash
-# Basic usage
-python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json
+This tool is designed to work through Claude Desktop. For command line usage and PDF modification capabilities, see the **Archived Modification Engine** folder which contains standalone scripts and advanced features.
 
-# With specific output directory
-python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json --output ~/Documents/
-
-# Dry run (preview changes without modifying)
-python scripts/pdf_bem_modifier.py --pdf form.pdf --json mappings.json --dry-run
-```
+### Basic Workflow
+1. Upload PDF to Claude Desktop
+2. Use `generate_BEM_names` tool
+3. Download the generated JSON mapping
+4. Use external tools for PDF modification (see archived folder)
 
 ## 📊 Project Structure
 
 ```
-pdf-enrichment-platform/
+vpars3/
 ├── src/pdf_enrichment/
-│   ├── mcp_server.py          # Single Claude Desktop tool
-│   ├── field_analyzer.py      # PDF field analysis
-│   ├── pdf_modifier.py        # PDF modification logic
+│   ├── mcp_server_simple.py   # Main Claude Desktop tool
 │   ├── field_types.py         # Type definitions
 │   └── utils.py               # Utility functions
-├── scripts/
-│   └── pdf_bem_modifier.py    # Standalone PDF modifier
-├── tests/                     # Test suite
+├── Archived Modification Engine/
+│   ├── mcp_servers/           # Enhanced MCP servers
+│   ├── scripts/               # Standalone PDF modification tools
+│   ├── components/            # Advanced field detection and modification
+│   ├── documentation/         # Technical documentation
+│   └── tests/                 # Test suite
+├── docs/                      # Core documentation
 └── examples/                  # Sample files
 ```
 
 ## 🧪 Testing
 
 ```bash
-# Run tests
-uv run pytest
+# Test the MCP server
+python -m src.pdf_enrichment.mcp_server_simple
 
-# Test with sample PDF
-python scripts/pdf_bem_modifier.py --pdf examples/sample_form.pdf --json examples/sample_mappings.json --dry-run
+# For advanced testing, see the Archived Modification Engine folder
 ```
 
 ## 🐛 Troubleshooting
@@ -184,53 +180,32 @@ python scripts/pdf_bem_modifier.py --pdf examples/sample_form.pdf --json example
 **Claude Desktop not finding tool:**
 ```bash
 # Verify MCP server
-python -m pdf_enrichment.mcp_server_v2
+python -m src.pdf_enrichment.mcp_server_simple
 
 # Check config path
 cat ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
-**PDF modification errors:**
-```bash
-# Check file permissions
-ls -la your-file.pdf
-
-# Verify PyPDFForm installation
-python -c "import PyPDFForm; print('OK')"
-```
-
-**Missing output file:**
-- Check that input PDF path is correct
-- Ensure you have write permissions to the directory
-- Verify JSON mappings file exists and is valid
-
-**BEM validation errors:**
-```bash
-# Test BEM name validation
-python -c "
-from src.pdf_enrichment.pdf_modifier import PDFModifier
-modifier = PDFModifier()
-print(modifier._is_valid_bem_name('owner-information_first-name'))  # Should be True
-"
-```
-
-**Field detection issues:**
+**Tool not generating BEM names:**
 - Ensure PDF has fillable form fields (not just scanned image)
 - Check for proper field names in the PDF
 - Verify field types are correctly identified
+- Upload PDF directly to Claude Desktop
 
-### Known Limitations
+**JSON output issues:**
+- Copy the entire JSON output from the tool response
+- Check for proper JSON formatting
+- Verify all required fields are present
 
-- **Manual field mapping**: Automatic field detection needs improvement
-- **Radio group detection**: May require manual verification
-- **JSON format**: Occasional formatting issues with complex mappings
-- **Field type validation**: Some boolean property validation errors
+### Advanced Troubleshooting
+
+For advanced PDF modification and field detection issues, see the **Archived Modification Engine** folder which contains comprehensive troubleshooting guides and advanced diagnostic tools.
 
 ### Performance Notes
 
 - **Large PDFs**: Processing time increases with form complexity
 - **Memory usage**: Complex forms with many fields may use more memory
-- **Validation time**: BEM name validation is fast but field detection can be slow
+- **Tool responsiveness**: BEM name generation is optimized for Claude Desktop integration
 
 ## 📄 License
 
@@ -238,4 +213,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Simple, clean PDF field renaming with BEM conventions! 🚀**
+**Simple Claude Desktop tool for BEM field name generation! 🚀**

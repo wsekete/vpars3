@@ -6,7 +6,7 @@
         "run",
         "python",
         "-m",
-        "src.pdf_enrichment.mcp_server"
+        "src.pdf_enrichment.mcp_server_simple"
       ],
       "cwd": "/Users/wseke/Desktop/vpars3",
       "env": {

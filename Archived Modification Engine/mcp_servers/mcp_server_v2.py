@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,20 +20,15 @@ from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
-    CallToolResult,
-    ListPromptsResult,
-    ListResourcesResult,
-    ListToolsResult,
     ServerCapabilities,
     TextContent,
     Tool,
 )
 from pydantic import BaseModel, Field
-
-from src.pdf_enrichment.field_types import FieldModificationResult
+from src.pdf_enrichment.field_analyzer import FieldAnalyzer
+from src.pdf_enrichment.field_types import FieldModificationResult, FormField
 from src.pdf_enrichment.pdf_modifier import PDFModifier
 from src.pdf_enrichment.utils import setup_logging
-
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -41,7 +37,7 @@ logger = logging.getLogger(__name__)
 class GenerateBEMNamesInput(BaseModel):
     """Input for generate_BEM_names tool."""
     context: Optional[str] = Field(
-        None, 
+        None,
         description="Optional context about the PDF form (e.g., form type, organization)"
     )
 
@@ -57,22 +53,30 @@ class ModifyFormFieldsInput(BaseModel):
     )
 
 
+class ValidateBEMJSONInput(BaseModel):
+    """Input for validate_bem_json tool."""
+    json_content: str = Field(
+        description="JSON content to validate (BEM mapping JSON from generate_BEM_names)"
+    )
+
+
 class PDFEnrichmentServer:
     """MCP Server for PDF Form Field Enrichment."""
-    
+
     def __init__(self) -> None:
         self.server = Server("pdf-enrichment", version="0.1.0")
         self.pdf_modifier = PDFModifier()
-        
+        self.field_analyzer = FieldAnalyzer()
+
         # Register handlers
         self._register_handlers()
-        
+
         # Server state
         self.modification_results: Dict[str, FieldModificationResult] = {}
-    
+
     def _register_handlers(self) -> None:
         """Register all MCP handlers."""
-        
+
         @self.server.list_tools()
         async def list_tools():
             """List available tools."""
@@ -83,62 +87,144 @@ class PDFEnrichmentServer:
                     inputSchema=GenerateBEMNamesInput.model_json_schema(),
                 ),
                 Tool(
+                    name="validate_bem_json",
+                    description="✅ Validate and clean BEM mapping JSON before applying to PDF",
+                    inputSchema=ValidateBEMJSONInput.model_json_schema(),
+                ),
+                Tool(
                     name="modify_form_fields",
                     description="🔧 Apply BEM field mappings to uploaded PDF and download modified version to Downloads folder",
                     inputSchema=ModifyFormFieldsInput.model_json_schema(),
                 ),
             ]
-        
+
         @self.server.list_prompts()
         async def list_prompts():
             """List available prompts."""
             return []
-        
+
         @self.server.list_resources()
         async def list_resources():
             """List available resources."""
             return []
-        
+
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict[str, Any]):
             """Handle tool calls."""
             if name == "generate_BEM_names":
                 return await self._generate_bem_names(GenerateBEMNamesInput(**arguments))
+            elif name == "validate_bem_json":
+                return await self._validate_bem_json(ValidateBEMJSONInput(**arguments))
             elif name == "modify_form_fields":
                 return await self._modify_form_fields(ModifyFormFieldsInput(**arguments))
             else:
                 raise ValueError(f"Unknown tool: {name}")
-    
+
     async def _generate_bem_names(self, input_data: GenerateBEMNamesInput):
         """Generate BEM-style field names for PDF forms."""
         logger.info("Generating BEM names for uploaded PDF")
-        
+
         # Get optional context
         context_info = input_data.context or "the uploaded PDF form"
-        
+
+        # Find uploaded PDF file
+        pdf_file_path = await self._find_uploaded_pdf()
+
+        if not pdf_file_path:
+            # Enhanced diagnostic information
+            diagnostic_info = await self._get_pdf_search_diagnostic()
+            
+            return [
+                TextContent(
+                    type="text",
+                    text=f"""# 📋 PDF File Not Found for BEM Generation
+
+I couldn't locate the uploaded PDF file automatically. Here's what I found:
+
+{diagnostic_info}
+
+## 🔧 Solutions:
+1. **Save the PDF** from this conversation to your Downloads or Desktop folder
+2. **Run this tool again** - it will automatically find and analyze the PDF
+3. **Check the locations above** - the PDF might be in a different location
+
+## 🚀 What This Tool Does:
+- Automatically extracts ALL form fields from your PDF
+- Generates BEM-style field names based on actual field names
+- Creates a comprehensive mapping with field types and locations
+- Provides a downloadable JSON with complete field mappings
+
+**Try saving the PDF to your Downloads folder and running this tool again!**"""
+                )
+            ]
+
+        # Extract actual form fields from PDF
+        try:
+            logger.info(f"Extracting fields from: {pdf_file_path}")
+            form_fields = await self.field_analyzer.extract_form_fields(pdf_file_path)
+            logger.info(f"Extracted {len(form_fields)} fields from PDF")
+        except Exception as e:
+            logger.error(f"Error extracting fields: {e}")
+            return [
+                TextContent(
+                    type="text",
+                    text=f"""# ❌ Error Extracting PDF Fields
+
+Failed to extract form fields from: {pdf_file_path}
+
+**Error:** {e!s}
+
+## 🔧 Troubleshooting:
+1. Ensure the PDF file is a valid form with fillable fields
+2. Check that the PDF is not password protected
+3. Try re-uploading the PDF to this conversation
+4. Verify the PDF is not corrupted
+
+Please upload a valid PDF form and try again."""
+                )
+            ]
+
+        # Generate field summary for the prompt
+        field_summary = self._generate_field_summary(form_fields, pdf_file_path)
+
+        # Detect radio groups
+        radio_groups = self.field_analyzer.detect_radio_groups(form_fields)
+        radio_summary = self._generate_radio_group_summary(radio_groups)
+
         # Return the BEM naming prompt for Claude Desktop to execute
-        bem_prompt = f"""# BEM Field Name Generation for Uploaded PDF
+        bem_prompt = f"""# BEM Field Name Generation for Uploaded PDF: {pdf_file_path.name}
+
+✅ **AUTOMATED FIELD EXTRACTION COMPLETE!**
+
+I have automatically extracted **{len(form_fields)}** form fields from your PDF. Below is the complete field inventory with actual field names, types, and positions.
 
 You are a PDF form field analyzer. For the PDF form uploaded in this conversation, generate consistent BEM-style API names for AcroFields based on financial services conventions.
+
+## 📋 EXTRACTED FIELD INVENTORY ({len(form_fields)} total fields):
+{field_summary}
+
+{radio_summary}
 
 {f"**Context**: {context_info}" if input_data.context else ""}
 
 ## 🚨 CRITICAL REQUIREMENT: COMPLETE FIELD MAPPING
 **YOU MUST include EVERY SINGLE form field found in the PDF. No exceptions.**
 
-### Field Discovery Process (MANDATORY):
-1. **SCAN THE ENTIRE PDF** - Don't skip any pages or sections
-2. **INVENTORY ALL FIELDS** - Including text fields, checkboxes, radio buttons, dropdowns, signatures, date fields, etc.
-3. **COUNT TOTAL FIELDS** - Keep track of how many fields you find
-4. **VERIFY COMPLETENESS** - Ensure your final mapping matches the total count
+### ✅ FIELD EXTRACTION COMPLETE:
+The automated field extraction has already identified **{len(form_fields)}** form fields from your PDF. All field names, types, and positions are listed above.
+
+### Your Task:
+1. **USE THE EXTRACTED FIELD LIST** - All {len(form_fields)} fields are already identified above
+2. **GENERATE BEM NAMES** - Create BEM-style names for each extracted field
+3. **MAINTAIN FIELD TYPES** - Use the correct field types from the extraction
+4. **VERIFY COMPLETENESS** - Ensure your final mapping includes all {len(form_fields)} fields
 
 ### Completeness Requirements:
-- ❌ **DO NOT omit any fields**, even if they seem redundant or similar
-- ❌ **DO NOT take shortcuts** or provide "sample" mappings
-- ❌ **DO NOT skip fields** because they're unclear or complex
-- ✅ **INCLUDE EVERY FIELD** found in the PDF, no matter how many there are
-- ✅ **If a field is unclear**, include it with a note rather than skipping it
-- ✅ **Include empty or optional fields** that may not have visible labels
+- ✅ **All {len(form_fields)} fields are already discovered** - use the list above
+- ✅ **INCLUDE EVERY FIELD** from the extracted list - no exceptions
+- ❌ **DO NOT omit any fields** from the extracted list
+- ❌ **DO NOT add fields** that weren't in the extracted list
+- ✅ **Use the exact field names** from the "Field Name" column above
 
 ## BEM Format Rules:
 - **Structure**: `block_element__modifier`
@@ -203,14 +289,13 @@ Before providing your final output, you MUST:
 Please provide:
 
 ### 1. Field Discovery Summary
-**Field Discovery: Found [X] total fields, Mapped [Y] fields**
-*(These numbers MUST match)*
+**Field Discovery: Found {len(form_fields)} total fields, Mapped [Y] fields**
+*(Y MUST equal {len(form_fields)})*
 
-### 2. Review Table (ALL FIELDS)
+### 2. Review Table (ALL {len(form_fields)} FIELDS)
 | Original Field Name | Proposed BEM Name | Field Type | Section | Confidence |
 |---------------------|-------------------|------------|---------|------------|
-| ... | ... | ... | ... | ... |
-*(Include EVERY field found - no exceptions)*
+*(Include ALL {len(form_fields)} fields from the extraction list above)*
 
 ### 3. 📥 DOWNLOADABLE ARTIFACT: Complete BEM Mapping JSON
 **IMPORTANT**: Create this JSON as a downloadable artifact (not just a code block) so the user can save it directly to their computer.
@@ -218,27 +303,28 @@ Please provide:
 The JSON should contain:
 ```json
 {{
-  "filename": "[PDF filename from upload]",
+  "filename": "{pdf_file_path.name}",
   "analysis_timestamp": "[current timestamp]",
-  "total_fields_found": [X],
-  "total_fields_mapped": [Y],
+  "total_fields_found": {len(form_fields)},
+  "total_fields_mapped": {len(form_fields)},
   "form_context": "{context_info}",
   "bem_mappings": {{
-    "original_field_name_1": "bem_field_name_1",
-    "original_field_name_2": "bem_field_name_2",
-    "dividend_option_group": "dividend-option--group",
-    "dividend_option_cash": "dividend-option__cash",
-    "dividend_option_reduce_premium": "dividend-option__reduce-premium"
+    // Map each field from the extracted list above
+    // Use EXACT field names from the "Field Name" column
+    // Example for extracted fields:
+    {self._generate_example_bem_mappings(form_fields[:3] if len(form_fields) > 3 else form_fields)}
   }},
   "radio_groups": {{
+    // Only include if radio button fields were found
     "group_name--group": ["option1", "option2", "option3"]
   }},
   "field_details": [
+    // Include ALL {len(form_fields)} fields from the extraction
     {{
-      "original_name": "original_field_name",
-      "bem_name": "bem_field_name",
-      "field_type": "text|checkbox|radio|radio_group|dropdown|signature|date",
-      "section": "section_name",
+      "original_name": "exact_field_name_from_extraction",
+      "bem_name": "your_generated_bem_name",
+      "field_type": "use_type_from_extraction",
+      "section": "inferred_section_name",
       "confidence": "high|medium|low",
       "reasoning": "explanation of naming choice"
     }}
@@ -330,22 +416,114 @@ Before submitting, verify:
 - **Date**: `"field_type": "date"` (date fields, especially signature dates)
 
 **🎯 FINAL INSTRUCTION: Analyze the uploaded PDF form and generate BEM field names for EVERY SINGLE FIELD. Pay special attention to radio button groups - use the enhanced detection method to ensure you find ALL radio groups and their individual options. Create a downloadable JSON artifact with the complete mapping.**"""
-        
+
         return [
             TextContent(
                 type="text",
                 text=bem_prompt
             )
         ]
-    
+
+    async def _validate_bem_json(self, input_data: ValidateBEMJSONInput):
+        """Validate and clean BEM mapping JSON."""
+        logger.info("Validating BEM mapping JSON")
+
+        try:
+            # Validate and clean the JSON
+            validated_data = self._validate_bem_mapping_json(input_data.json_content)
+
+            # Create clean JSON output
+            clean_json = self._create_validated_json_output(validated_data)
+
+            # Count mappings
+            mapping_count = len(validated_data.get('bem_mappings', {}))
+
+            # Check for radio groups
+            radio_groups = validated_data.get('radio_groups', {})
+            radio_group_count = len(radio_groups)
+
+            success_message = f"""# ✅ BEM Mapping JSON Validation Successful!
+
+## 📊 Validation Summary:
+- **Total Mappings**: {mapping_count}
+- **Radio Groups**: {radio_group_count}
+- **Filename**: {validated_data.get('filename', 'Unknown')}
+- **Fields Found**: {validated_data.get('total_fields_found', 'Unknown')}
+
+## 🔧 Validation Checks Passed:
+- ✅ Valid JSON format
+- ✅ Required fields present
+- ✅ Mapping structure correct
+- ✅ All mapping values are strings
+- ✅ No extra data or corruption
+- ✅ Timestamp added if missing
+
+## 📥 Clean JSON Output:
+```json
+{clean_json}
+```
+
+## 🎯 Next Steps:
+Your BEM mapping JSON is valid and ready to use! You can now:
+1. Copy the clean JSON above
+2. Use the `modify_form_fields` tool with the field mappings
+3. The mappings will be applied to your PDF automatically
+
+**The JSON has been cleaned and validated - ready for PDF modification!**"""
+
+            return [
+                TextContent(
+                    type="text",
+                    text=success_message
+                )
+            ]
+
+        except Exception as e:
+            error_message = f"""# ❌ BEM Mapping JSON Validation Failed
+
+**Error**: {e!s}
+
+## 🔧 Common Issues and Solutions:
+
+### JSON Format Errors:
+- Ensure all strings are properly quoted
+- Remove any trailing commas
+- Check for missing or extra braces
+- Remove any comments (// text)
+
+### Missing Required Fields:
+- `filename`: PDF filename
+- `total_fields_found`: Number of fields
+- `bem_mappings`: Dictionary of field mappings
+
+### Invalid Mappings:
+- All mapping keys and values must be strings
+- Use exact field names from PDF
+- Follow BEM naming conventions
+
+## 💡 Tips:
+1. Copy the JSON from the generate_BEM_names output
+2. Ensure it's properly formatted as valid JSON
+3. Check that all required fields are present
+4. Remove any extra text after the closing brace
+
+Please fix the JSON format and try validation again."""
+
+            return [
+                TextContent(
+                    type="text",
+                    text=error_message
+                )
+            ]
+
     async def _modify_form_fields(self, input_data: ModifyFormFieldsInput):
         """Modify PDF form fields using BEM mappings."""
         logger.info("Modifying uploaded PDF with BEM field mappings")
-        
+
         try:
             # Find uploaded PDF file in common locations
             pdf_file_path = await self._find_uploaded_pdf()
-            
+
             if not pdf_file_path:
                 return [
                     TextContent(
@@ -353,20 +531,20 @@ Before submitting, verify:
                         text=self._get_file_not_found_instructions(input_data)
                     )
                 ]
-            
+
             # Set up output path in Downloads folder
             downloads_folder = Path.home() / "Downloads"
             downloads_folder.mkdir(exist_ok=True)
-            
+
             # Generate output filename
             if input_data.output_filename:
                 output_filename = input_data.output_filename
             else:
                 original_stem = pdf_file_path.stem
                 output_filename = f"{original_stem}_BEM_renamed.pdf"
-            
+
             output_path = downloads_folder / output_filename
-            
+
             # Perform PDF modification
             logger.info(f"Modifying PDF: {pdf_file_path} -> {output_path}")
             modification_result = await self.pdf_modifier.modify_fields(
@@ -375,7 +553,7 @@ Before submitting, verify:
                 output_path=output_path,
                 preserve_original=True
             )
-            
+
             if modification_result.success:
                 success_message = f"""# ✅ PDF Field Modification Complete!
 
@@ -398,7 +576,7 @@ The modified PDF is ready at: **{output_path}**
 
 ## 🎉 Success!
 Your PDF now has properly named BEM fields and is ready for use in your applications!"""
-            
+
             else:
                 success_message = f"""# ❌ PDF Field Modification Failed
 
@@ -412,14 +590,14 @@ Your PDF now has properly named BEM fields and is ready for use in your applicat
 ## 📋 Your Field Mappings:
 {chr(10).join(f"- `{original}` → `{bem_name}`" for original, bem_name in list(input_data.field_mappings.items())[:5])}
 {f"... and {len(input_data.field_mappings) - 5} more mappings" if len(input_data.field_mappings) > 5 else ""}"""
-            
+
             return [
                 TextContent(
                     type="text",
                     text=success_message
                 )
             ]
-            
+
         except Exception as e:
             logger.exception("Error in PDF modification")
             return [
@@ -427,7 +605,7 @@ Your PDF now has properly named BEM fields and is ready for use in your applicat
                     type="text",
                     text=f"""# ❌ PDF Modification Error
 
-**Error:** {str(e)}
+**Error:** {e!s}
 
 ## 🔧 Troubleshooting:
 1. Ensure you have uploaded a PDF file to this conversation
@@ -439,50 +617,102 @@ Your PDF now has properly named BEM fields and is ready for use in your applicat
 {f"... and {len(input_data.field_mappings) - 5} more mappings" if len(input_data.field_mappings) > 5 else ""}"""
                 )
             ]
-    
+
     async def _find_uploaded_pdf(self) -> Optional[Path]:
         """Find uploaded PDF file in common locations."""
         from datetime import datetime, timedelta
-        
+
         # Common locations where Claude Desktop might store uploaded files
         search_locations = [
             Path.home() / "Downloads",
-            Path.home() / "Desktop", 
+            Path.home() / "Desktop",
             Path("/tmp"),
             Path("/var/tmp"),
         ]
-        
+
         # Add macOS temp folders if they exist
         var_folders = Path("/var/folders")
         if var_folders.exists():
             for temp_folder in var_folders.glob("*/T/TemporaryItems/NSIRD_*"):
                 if temp_folder.is_dir():
                     search_locations.append(temp_folder)
-        
+
         pdf_files = []
-        
+
         for location in search_locations:
             if location.exists() and location.is_dir():
                 try:
-                    # Find PDF files modified in the last hour (recently uploaded)
-                    one_hour_ago = datetime.now() - timedelta(hours=1)
-                    
+                    # Find PDF files modified in the last 24 hours (recently uploaded)
+                    one_day_ago = datetime.now() - timedelta(hours=24)
+
                     for pdf_file in location.glob("*.pdf"):
                         if pdf_file.is_file():
                             mod_time = datetime.fromtimestamp(pdf_file.stat().st_mtime)
-                            if mod_time > one_hour_ago:
+                            if mod_time > one_day_ago:
                                 pdf_files.append((pdf_file, mod_time))
                 except (PermissionError, OSError):
                     # Skip locations we can't read
                     continue
-        
+
         if pdf_files:
             # Return the most recently modified PDF file
             pdf_files.sort(key=lambda x: x[1], reverse=True)
             return pdf_files[0][0]
-        
+
         return None
-    
+
+    async def _get_pdf_search_diagnostic(self) -> str:
+        """Get diagnostic information about PDF file search."""
+        from datetime import datetime, timedelta
+        
+        search_locations = [
+            Path.home() / "Downloads",
+            Path.home() / "Desktop", 
+            Path("/tmp"),
+            Path("/var/tmp"),
+        ]
+
+        # Add macOS temp folders if they exist
+        var_folders = Path("/var/folders")
+        if var_folders.exists():
+            for temp_folder in var_folders.glob("*/T/TemporaryItems/NSIRD_*"):
+                if temp_folder.is_dir():
+                    search_locations.append(temp_folder)
+
+        diagnostic_lines = ["## 🔍 PDF Search Diagnostic:"]
+        
+        one_day_ago = datetime.now() - timedelta(hours=24)
+        total_pdfs_found = 0
+        
+        for location in search_locations:
+            if location.exists() and location.is_dir():
+                try:
+                    pdf_files = []
+                    for pdf_file in location.glob("*.pdf"):
+                        if pdf_file.is_file():
+                            mod_time = datetime.fromtimestamp(pdf_file.stat().st_mtime)
+                            if mod_time > one_day_ago:
+                                pdf_files.append((pdf_file, mod_time))
+                    
+                    if pdf_files:
+                        total_pdfs_found += len(pdf_files)
+                        diagnostic_lines.append(f"- **{location}**: {len(pdf_files)} recent PDF(s) found")
+                        for pdf_file, mod_time in pdf_files[:3]:  # Show first 3
+                            diagnostic_lines.append(f"  - {pdf_file.name} (modified: {mod_time.strftime('%Y-%m-%d %H:%M:%S')})")
+                        if len(pdf_files) > 3:
+                            diagnostic_lines.append(f"  - ... and {len(pdf_files) - 3} more")
+                    else:
+                        diagnostic_lines.append(f"- **{location}**: No recent PDFs found")
+                except (PermissionError, OSError):
+                    diagnostic_lines.append(f"- **{location}**: Permission denied")
+            else:
+                diagnostic_lines.append(f"- **{location}**: Directory doesn't exist")
+        
+        diagnostic_lines.append(f"\n**Total recent PDFs found**: {total_pdfs_found}")
+        diagnostic_lines.append("**Search criteria**: Modified within last 24 hours")
+        
+        return "\n".join(diagnostic_lines)
+
     def _get_file_not_found_instructions(self, input_data: ModifyFormFieldsInput) -> str:
         """Get instructions when PDF file is not found."""
         return f"""# 📋 PDF File Not Found
@@ -517,7 +747,184 @@ I have your **{len(input_data.field_mappings)}** BEM field mappings ready to app
 - Create a downloadable PDF with properly named fields
 
 **Try saving the PDF to your Downloads folder and running this tool again!**"""
-    
+
+    def _generate_field_summary(self, form_fields: List[FormField], pdf_file_path: Path) -> str:
+        """Generate a summary of extracted form fields."""
+        if not form_fields:
+            return "No form fields found in PDF."
+
+        # Group fields by type for better organization
+        field_types = {}
+        for field in form_fields:
+            field_type = field.field_type.value
+            if field_type not in field_types:
+                field_types[field_type] = []
+            field_types[field_type].append(field)
+
+        summary_lines = []
+
+        # Add field type summary
+        summary_lines.append("### Field Type Summary:")
+        for field_type, fields in field_types.items():
+            summary_lines.append(f"- **{field_type}**: {len(fields)} fields")
+
+        summary_lines.append("")
+        summary_lines.append("### Complete Field List:")
+        summary_lines.append("| Field Name | Type | Label | Page | Position |")
+        summary_lines.append("|------------|------|-------|------|----------|")
+
+        for field in form_fields:
+            summary_lines.append(
+                f"| `{field.name}` | {field.field_type.value} | {field.label} | {field.position.page + 1} | ({field.position.x:.0f}, {field.position.y:.0f}) |"
+            )
+
+        return "\n".join(summary_lines)
+
+    def _generate_radio_group_summary(self, radio_groups: Dict[str, List[str]]) -> str:
+        """Generate a summary of detected radio groups."""
+        if not radio_groups:
+            return "### 🔘 Radio Group Detection:\n**No radio groups detected** (no radio button fields found or no logical groupings identified)"
+
+        summary_lines = [
+            f"### 🔘 RADIO GROUP DETECTION ({len(radio_groups)} groups detected):",
+            "**✅ AUTOMATIC GROUPING COMPLETE!**",
+            "",
+            "The enhanced multi-strategy radio detection has identified the following radio button groups:"
+        ]
+
+        for group_name, field_names in radio_groups.items():
+            summary_lines.append("")
+            summary_lines.append(f"**Group: {group_name}**")
+            summary_lines.append(f"- **Fields**: {', '.join(f'`{name}`' for name in field_names)}")
+            summary_lines.append(f"- **Count**: {len(field_names)} radio buttons")
+            summary_lines.append(f"- **BEM Mapping Required**: `{group_name}--group` (container) + individual option mappings")
+
+        summary_lines.extend([
+            "",
+            "### 🎯 Radio Group Mapping Instructions:",
+            "For each group above, you MUST create:",
+            "1. **Group Container**: `section_category--group` (e.g., `payment-method--group`)",
+            "2. **Individual Options**: `section_category__option-name` (e.g., `payment-method__ach`, `payment-method__check`)",
+            "",
+            "**CRITICAL**: Use the EXACT field names listed above in your mappings."
+        ])
+
+        return "\n".join(summary_lines)
+
+    def _generate_example_bem_mappings(self, fields: List[FormField]) -> str:
+        """Generate example BEM mappings for the first few fields."""
+        if not fields:
+            return '"field_name_1": "section_field-name"'
+
+        examples = []
+        for field in fields:
+            # Generate a simple BEM name based on the field name
+            bem_name = self._suggest_bem_name(field.name)
+            examples.append(f'"{field.name}": "{bem_name}"')
+
+        return ",\n    ".join(examples)
+
+    def _suggest_bem_name(self, field_name: str) -> str:
+        """Suggest a BEM name for a field (simple example)."""
+        # This is a basic example - Claude will generate the actual names
+        clean_name = field_name.lower().replace("_", "-")
+        if "name" in clean_name:
+            return f"owner-information_{clean_name}"
+        elif "address" in clean_name:
+            return f"contact-details_{clean_name}"
+        elif "signature" in clean_name:
+            return f"signatures_{clean_name}"
+        else:
+            return f"form-data_{clean_name}"
+
+    def _validate_bem_mapping_json(self, json_string: str) -> Dict[str, Any]:
+        """Validate and clean BEM mapping JSON."""
+        try:
+            # First attempt to parse the JSON
+            data = json.loads(json_string)
+
+            # Validate required fields
+            required_fields = ['filename', 'total_fields_found', 'bem_mappings']
+            for field in required_fields:
+                if field not in data:
+                    raise ValueError(f"Missing required field: {field}")
+
+            # Validate bem_mappings structure
+            if not isinstance(data['bem_mappings'], dict):
+                raise ValueError("bem_mappings must be a dictionary")
+
+            # Ensure all mapping values are strings
+            for key, value in data['bem_mappings'].items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise ValueError(f"Invalid mapping: {key} -> {value}")
+
+            # Add timestamp if missing
+            if 'analysis_timestamp' not in data:
+                data['analysis_timestamp'] = datetime.now().isoformat()
+
+            return data
+
+        except json.JSONDecodeError as e:
+            # Try to fix common JSON issues
+            cleaned_json = self._clean_json_string(json_string)
+            try:
+                data = json.loads(cleaned_json)
+                return self._validate_bem_mapping_json(cleaned_json)
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid JSON format: {e!s}")
+
+    def _clean_json_string(self, json_string: str) -> str:
+        """Clean common JSON formatting issues."""
+        # Remove any extra data after the closing brace
+        json_string = json_string.strip()
+
+        # Find the last closing brace
+        brace_count = 0
+        last_brace_pos = -1
+
+        for i, char in enumerate(json_string):
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    last_brace_pos = i
+                    break
+
+        if last_brace_pos != -1:
+            # Trim everything after the last closing brace
+            json_string = json_string[:last_brace_pos + 1]
+
+        # Remove any trailing commas
+        json_string = json_string.replace(',}', '}').replace(',]', ']')
+
+        # Remove any comments (not valid JSON)
+        lines = json_string.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # Remove lines that start with // (comments)
+            if not line.strip().startswith('//'):
+                cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
+
+    def _create_validated_json_output(self, data: Dict[str, Any]) -> str:
+        """Create clean, validated JSON output."""
+        try:
+            # Validate the data structure
+            validated_data = self._validate_bem_mapping_json(json.dumps(data))
+
+            # Create clean JSON string
+            json_string = json.dumps(validated_data, indent=2, ensure_ascii=False)
+
+            # Validate by parsing back
+            json.loads(json_string)  # Will raise if invalid
+
+            return json_string
+
+        except Exception as e:
+            raise ValueError(f"Failed to create valid JSON: {e!s}")
+
     def _format_modification_summary(self, result: FieldModificationResult) -> str:
         """Format field modification summary."""
         if result.success:
@@ -558,14 +965,14 @@ I have your **{len(input_data.field_mappings)}** BEM field mappings ready to app
 ---
 **Please review the errors above and try again.**
 """
-        
+
         return summary
-    
+
     async def run(self) -> None:
         """Run the MCP server."""
         setup_logging(level=logging.INFO)
         logger.info("Starting PDF Enrichment MCP Server...")
-        
+
         try:
             async with stdio_server() as (read_stream, write_stream):
                 logger.info("Connected to stdio streams")

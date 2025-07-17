@@ -6,19 +6,16 @@ Ultra-simple server that works around MCP serialization issues
 """
 
 import asyncio
-import json
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from mcp.server.models import InitializationOptions
-from mcp.server.stdio import stdio_server
-from mcp.server import Server
-from mcp.types import CallToolResult, ServerCapabilities, TextContent
-from pydantic import BaseModel, Field
-
 import sys
 from pathlib import Path
+from typing import Any, List, Optional
+
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+from mcp.server.stdio import stdio_server
+from mcp.types import CallToolResult, ServerCapabilities, TextContent
+from pydantic import BaseModel, Field
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -39,7 +36,7 @@ field_analyzer = FieldAnalyzer()
 
 class GenerateBEMNamesInput(BaseModel):
     """Input for generate_bem_names tool."""
-    
+
     pdf_filename: str = Field(description="Name of the PDF file uploaded to Claude Desktop")
     custom_context: Optional[str] = Field(
         None,
@@ -69,14 +66,14 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> CallToolResu
             return await generate_bem_names(GenerateBEMNamesInput(**arguments))
         else:
             raise ValueError(f"Unknown tool: {name}")
-    
+
     except ValueError as e:
         logger.error(f"Invalid arguments for tool {name}: {e}")
         return CallToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text=f"❌ Invalid arguments for {name}: {str(e)}"
+                    text=f"❌ Invalid arguments for {name}: {e!s}"
                 )
             ]
         )
@@ -86,7 +83,7 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> CallToolResu
             content=[
                 TextContent(
                     type="text",
-                    text=f"❌ Error executing {name}: {str(e)}"
+                    text=f"❌ Error executing {name}: {e!s}"
                 )
             ]
         )
@@ -116,11 +113,11 @@ async def generate_bem_names(input_data: GenerateBEMNamesInput) -> CallToolResul
                     )
                 ]
             )
-        
+
         # Extract form fields
         logger.info(f"Extracting form fields from {pdf_path}")
         form_fields = await field_analyzer.extract_form_fields(pdf_path)
-        
+
         if not form_fields:
             return CallToolResult(
                 content=[
@@ -141,12 +138,12 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                     )
                 ]
             )
-        
+
         # Generate embedded BEM naming prompt
         bem_analysis_prompt = create_bem_analysis_prompt(
             form_fields, pdf_path.name, input_data.custom_context
         )
-        
+
         return CallToolResult(
             content=[
                 TextContent(
@@ -155,14 +152,14 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                 )
             ]
         )
-    
+
     except Exception as e:
         logger.exception("Error generating BEM names")
         return CallToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text=f"❌ Failed to analyze PDF: {str(e)}"
+                    text=f"❌ Failed to analyze PDF: {e!s}"
                 )
             ]
         )
@@ -174,30 +171,30 @@ async def find_pdf_file(filename: str) -> Optional[Path]:
         Path(filename),
         Path.home() / "Downloads" / filename,
         Path.home() / "Desktop" / filename,
-        Path(".") / filename,
+        Path(filename),
     ]
-    
+
     for location in search_locations:
         if location.exists() and location.suffix.lower() == '.pdf':
             return location
-    
+
     return None
 
 
 def create_bem_analysis_prompt(form_fields: List, filename: str, custom_context: Optional[str]) -> str:
     """Create comprehensive BEM analysis prompt with embedded field data."""
-    
+
     # Create field summary for the prompt
     field_summary = []
     for i, field in enumerate(form_fields[:50], 1):  # Limit to 50 for prompt size
         field_summary.append(f"{i}. **{field.name}** (Type: {field.field_type.value})")
-    
+
     if len(form_fields) > 50:
         field_summary.append(f"... and {len(form_fields) - 50} more fields")
-    
+
     field_list = "\n".join(field_summary)
     context_info = custom_context or "PDF form"
-    
+
     prompt = f"""# 🚀 BEM Field Name Generation for {filename}
 
 I've analyzed this PDF form and found **{len(form_fields)} form fields**. Please generate comprehensive BEM-style field names for ALL fields using financial services conventions.
@@ -298,7 +295,7 @@ async def main():
     """Main entry point."""
     setup_logging(level=logging.INFO)
     logger.info("Starting PDF BEM Naming MCP Server (minimal v0.2.0)...")
-    
+
     try:
         async with stdio_server() as (read_stream, write_stream):
             logger.info("Connected to stdio streams")

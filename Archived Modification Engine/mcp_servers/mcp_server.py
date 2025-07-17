@@ -9,12 +9,13 @@ with JSON export for use with external PDF modification tools.
 import asyncio
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.server import Server
 from mcp.types import (
     CallToolResult,
     ListToolsResult,
@@ -23,9 +24,6 @@ from mcp.types import (
     Tool,
 )
 from pydantic import BaseModel, Field
-
-import sys
-from pathlib import Path
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -41,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class GenerateBEMNamesInput(BaseModel):
     """Input for generate_bem_names tool."""
-    
+
     pdf_filename: str = Field(description="Name of the PDF file uploaded to Claude Desktop")
     custom_context: Optional[str] = Field(
         None,
@@ -51,7 +49,7 @@ class GenerateBEMNamesInput(BaseModel):
 
 class ExtractPDFFieldsInput(BaseModel):
     """Input for extract_pdf_fields tool."""
-    
+
     pdf_filename: str = Field(description="Name of the PDF file to analyze")
     detailed_analysis: bool = Field(
         True,
@@ -61,7 +59,7 @@ class ExtractPDFFieldsInput(BaseModel):
 
 class ModifyFormFieldsInput(BaseModel):
     """Input for modify_form_fields tool."""
-    
+
     pdf_filename: str = Field(description="Name of the PDF file to modify")
     field_mappings: Dict[str, str] = Field(
         description="Mapping of original field names to new BEM names"
@@ -78,22 +76,22 @@ class ModifyFormFieldsInput(BaseModel):
 
 class PDFEnrichmentServer:
     """Class-based MCP Server for PDF Form Field BEM Naming."""
-    
+
     def __init__(self) -> None:
         self.server = Server("pdf-enrichment")
         self.field_analyzer = FieldAnalyzer()
         self.pdf_modifier = PDFModifier()
-        
+
         # Server state
         self.analysis_cache: Dict[str, Any] = {}
         self.modification_results: Dict[str, Any] = {}
-        
+
         # Register tools
         self._register_tools()
-    
+
     def _register_tools(self) -> None:
         """Register MCP tools."""
-        
+
         @self.server.list_tools()
         async def handle_list_tools() -> ListToolsResult:
             """List available tools."""
@@ -106,7 +104,7 @@ class PDFEnrichmentServer:
                     ),
                 ]
             )
-        
+
         @self.server.call_tool()
         async def handle_call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             """Handle tool calls."""
@@ -115,14 +113,14 @@ class PDFEnrichmentServer:
                     return await self._generate_bem_names(GenerateBEMNamesInput(**arguments))
                 else:
                     raise ValueError(f"Unknown tool: {name}")
-            
+
             except ValueError as e:
                 logger.error(f"Invalid arguments for tool {name}: {e}")
                 return CallToolResult(
                     content=[
                         TextContent(
                             type="text",
-                            text=f"❌ Invalid arguments for {name}: {str(e)}"
+                            text=f"❌ Invalid arguments for {name}: {e!s}"
                         )
                     ]
                 )
@@ -132,11 +130,11 @@ class PDFEnrichmentServer:
                     content=[
                         TextContent(
                             type="text",
-                            text=f"❌ Error executing {name}: {str(e)}"
+                            text=f"❌ Error executing {name}: {e!s}"
                         )
                     ]
                 )
-    
+
     async def _generate_bem_names(self, input_data: GenerateBEMNamesInput) -> CallToolResult:
         """Generate BEM field names and export as JSON."""
         try:
@@ -161,11 +159,11 @@ class PDFEnrichmentServer:
                         )
                     ]
                 )
-            
+
             # Extract form fields
             logger.info(f"Extracting form fields from {pdf_path}")
             form_fields = await self.field_analyzer.extract_form_fields(pdf_path)
-            
+
             if not form_fields:
                 return CallToolResult(
                     content=[
@@ -186,19 +184,19 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                         )
                     ]
                 )
-            
+
             # Cache analysis result
             self.analysis_cache[input_data.pdf_filename] = {
                 'form_fields': form_fields,
                 'pdf_path': pdf_path,
                 'custom_context': input_data.custom_context
             }
-            
+
             # Generate embedded BEM naming prompt
             bem_analysis_prompt = self._create_bem_analysis_prompt(
                 form_fields, pdf_path.name, input_data.custom_context
             )
-            
+
             return CallToolResult(
                 content=[
                     TextContent(
@@ -207,7 +205,7 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                     )
                 ]
             )
-        
+
         except FileNotFoundError as e:
             logger.error(f"PDF file not found: {e}")
             return CallToolResult(
@@ -224,11 +222,11 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                 content=[
                     TextContent(
                         type="text",
-                        text=f"❌ Failed to analyze PDF: {str(e)}"
+                        text=f"❌ Failed to analyze PDF: {e!s}"
                     )
                 ]
             )
-    
+
     async def _extract_pdf_fields(self, input_data: ExtractPDFFieldsInput) -> CallToolResult:
         """Extract PDF form fields (for test compatibility)."""
         try:
@@ -242,9 +240,9 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                         )
                     ]
                 )
-            
+
             form_fields = await self.field_analyzer.extract_form_fields(pdf_path)
-            
+
             if not form_fields:
                 return CallToolResult(
                     content=[
@@ -254,10 +252,10 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                         )
                     ]
                 )
-            
+
             # Format field summary
             field_summary = self._format_field_summary(form_fields, input_data.pdf_filename)
-            
+
             # Generate JSON output
             json_output = {
                 "filename": input_data.pdf_filename,
@@ -279,7 +277,7 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                     for field in form_fields
                 ]
             }
-            
+
             return CallToolResult(
                 content=[
                     TextContent(
@@ -292,18 +290,18 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                     )
                 ]
             )
-            
+
         except Exception as e:
             logger.exception("Error extracting PDF fields")
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=f"❌ Failed to extract fields: {str(e)}"
+                        text=f"❌ Failed to extract fields: {e!s}"
                     )
                 ]
             )
-    
+
     async def _modify_form_fields(self, input_data: ModifyFormFieldsInput) -> CallToolResult:
         """Modify PDF form fields (for test compatibility)."""
         try:
@@ -317,13 +315,13 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                         )
                     ]
                 )
-            
+
             # Generate output filename
             if input_data.output_filename:
                 output_path = Path(input_data.output_filename)
             else:
                 output_path = pdf_path.with_stem(f"{pdf_path.stem}_bem_renamed")
-            
+
             # Perform field modifications
             logger.info(f"Modifying fields in {pdf_path}")
             modification_result = await self.pdf_modifier.modify_fields(
@@ -332,10 +330,10 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                 output_path=output_path,
                 preserve_original=input_data.preserve_original
             )
-            
+
             # Cache modification result
             self.modification_results[input_data.pdf_filename] = modification_result
-            
+
             # Format modification summary
             if modification_result.success:
                 summary = self._format_modification_summary(modification_result)
@@ -351,10 +349,10 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                 error_text = "## ❌ PDF Field Modification Failed\n\n"
                 error_text += f"**Original PDF:** {input_data.pdf_filename}\n"
                 error_text += f"**Errors:** {len(modification_result.errors)}\n\n"
-                
+
                 for error in modification_result.errors:
                     error_text += f"- {error}\n"
-                
+
                 return CallToolResult(
                     content=[
                         TextContent(
@@ -363,39 +361,39 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
                         )
                     ]
                 )
-        
+
         except Exception as e:
             logger.exception("Error modifying form fields")
             return CallToolResult(
                 content=[
                     TextContent(
                         type="text",
-                        text=f"❌ Failed to modify fields: {str(e)}"
+                        text=f"❌ Failed to modify fields: {e!s}"
                     )
                 ]
             )
-    
+
     async def _find_pdf_file(self, filename: str) -> Optional[Path]:
         """Find PDF file in common locations."""
         search_locations = [
             Path(filename),
             Path.home() / "Downloads" / filename,
             Path.home() / "Desktop" / filename,
-            Path(".") / filename,
+            Path(filename),
         ]
-        
+
         for location in search_locations:
             if location.exists() and location.suffix.lower() == '.pdf':
                 return location
-        
+
         return None
-    
+
     def _format_field_summary(self, form_fields: List, filename: str) -> str:
         """Format field summary for display."""
-        summary = f"## 📋 PDF Field Extraction Complete\n\n"
+        summary = "## 📋 PDF Field Extraction Complete\n\n"
         summary += f"**PDF:** {filename}\n"
         summary += f"**Total Fields:** {len(form_fields)}\n\n"
-        
+
         # Group fields by type
         field_types = {}
         for field in form_fields:
@@ -403,55 +401,55 @@ The PDF `{input_data.pdf_filename}` appears to have no fillable form fields.
             if field_type not in field_types:
                 field_types[field_type] = []
             field_types[field_type].append(field)
-        
+
         summary += "### Field Types:\n"
         for field_type, fields in field_types.items():
             summary += f"- **{field_type}:** {len(fields)} fields\n"
-        
+
         summary += "\n### Field Details:\n"
         for i, field in enumerate(form_fields[:20], 1):  # Limit to first 20
             summary += f"{i}. **{field.name}** ({field.field_type.value})\n"
-        
+
         if len(form_fields) > 20:
             summary += f"... and {len(form_fields) - 20} more fields\n"
-        
+
         return summary
-    
+
     def _format_modification_summary(self, result) -> str:
         """Format modification summary for display."""
-        summary = f"## ✅ PDF Field Modification Complete\n\n"
+        summary = "## ✅ PDF Field Modification Complete\n\n"
         summary += f"**Original PDF:** {Path(result.original_pdf_path).name}\n"
         summary += f"**Modified PDF:** {Path(result.modified_pdf_path).name}\n"
         summary += f"**Fields Modified:** {len(result.modifications)}\n"
         summary += f"**Timestamp:** {result.timestamp}\n\n"
-        
+
         if result.modifications:
             summary += "### Modifications:\n"
             for mod in result.modifications:
                 summary += f"- **{mod['old']}** → **{mod['new']}** ({mod['type']})\n"
-        
+
         if result.warnings:
             summary += "\n### Warnings:\n"
             for warning in result.warnings:
                 summary += f"- {warning}\n"
-        
+
         summary += "\n**Your PDF is ready for download!**"
         return summary
-    
+
     def _create_bem_analysis_prompt(self, form_fields: List, filename: str, custom_context: Optional[str]) -> str:
         """Create comprehensive BEM analysis prompt with embedded field data."""
-        
+
         # Create field summary for the prompt
         field_summary = []
         for i, field in enumerate(form_fields[:50], 1):  # Limit to 50 for prompt size
             field_summary.append(f"{i}. **{field.name}** (Type: {field.field_type.value})")
-        
+
         if len(form_fields) > 50:
             field_summary.append(f"... and {len(form_fields) - 50} more fields")
-        
+
         field_list = "\n".join(field_summary)
         context_info = custom_context or "PDF form"
-        
+
         prompt = f"""# 🚀 BEM Field Name Generation for {filename}
 
 I've analyzed this PDF form and found **{len(form_fields)} form fields**. Please generate comprehensive BEM-style field names for ALL fields using financial services conventions.
@@ -546,12 +544,12 @@ You MUST provide your response in this exact format:
 Please analyze ALL {len(form_fields)} fields above and provide the complete BEM mapping in the required JSON format. Remember: **EVERY field must be included - no exceptions!**"""
 
         return prompt
-    
+
     async def run(self) -> None:
         """Run the MCP server."""
         setup_logging(level=logging.INFO)
         logger.info("Starting PDF BEM Naming MCP Server (v0.2.0)...")
-        
+
         try:
             async with stdio_server() as (read_stream, write_stream):
                 logger.info("Connected to stdio streams")
